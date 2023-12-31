@@ -988,16 +988,17 @@ wasm_interp_call_func_native(WASMModuleInstance *module_inst,
     if (cur_func->ret_cell_num == 1) {
         prev_frame->sp[0] = argv_ret[0];
         prev_frame->sp++;
-        prev_frame->tsp[0] = 0;
+
+        prev_frame->tsp[0] = 1;
         prev_frame->tsp++;
     }
     else if (cur_func->ret_cell_num == 2) {
         prev_frame->sp[0] = argv_ret[0];
         prev_frame->sp[1] = argv_ret[1];
         prev_frame->sp += 2;
-        prev_frame->tsp[0] = 0;
-        prev_frame->tsp[1] = 0;
-        prev_frame->tsp += 2;
+
+        prev_frame->tsp[0] = 2;
+        prev_frame->tsp++;
     }
 
     FREE_FRAME(exec_env, frame);
