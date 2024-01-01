@@ -285,6 +285,37 @@ wasm_restore_stack(WASMExecEnv **_exec_env)
     return frame;
 }
 
+void restore_dirty_memory(WASMMemoryInstance **memory) {
+    // int page_size = sysconf(_SC_PAGESIZE);
+#define PAGE_SIZE 4096
+    FILE* new_memory_fp = open_image("new_memory.img", "rb");
+    // int file_size;
+    // fseek(new_memory_fp, 0, SEEK_END);
+    // fgetpos(new_memory_fp, &file_size);
+    // fseek(new_memory_fp, 0, SEEK_SET);
+    // printf("file_size: %d\n", file_size);
+
+    // int loop_cnt = file_size / (page_size + sizeof(uint32));
+    // int offset;
+    // printf("loop_cnt: %d\n", loop_cnt);
+    // printf("memory_size: %lu\n", (*memory)->cur_page_count * (*memory)->num_bytes_per_page);
+    // for (int i = 0; i < loop_cnt; ++i) {
+    while (!feof(new_memory_fp)) {
+        if (feof(new_memory_fp)) break;
+        uint64 offset;
+        uint32 len;
+        len = fread(&offset, sizeof(uint64), 1, new_memory_fp);
+        if (len == 0) break;
+        // printf("len: %d\n", len);
+        // printf("i: %d\n", offset);
+
+        uint8* addr = (*memory)->memory_data + offset;
+        len = fread(addr, PAGE_SIZE, 1, new_memory_fp);
+        // printf("PAGESIZE: %d\n", len);
+    }
+    fclose(new_memory_fp);
+}
+
 int wasm_restore_memory(WASMModuleInstance *module, WASMMemoryInstance **memory, uint8** maddr) {
     FILE* memory_fp = open_image("memory.img", "rb");
     FILE* mem_size_fp = open_image("mem_page_count.img", "rb");
@@ -294,10 +325,32 @@ int wasm_restore_memory(WASMModuleInstance *module, WASMMemoryInstance **memory,
     fread(&page_count, sizeof(uint32), 1, mem_size_fp);
     wasm_enlarge_memory(module, page_count- (*memory)->cur_page_count);
     *maddr = page_count * (*memory)->num_bytes_per_page;
+    
+    // restore memory_data
+    // int page_size = sysconf(_SC_PAGESIZE);
+    // int file_size;
+    // fseek(new_memory_fp, 0, SEEK_END);
+    // fgetpos(new_memory_fp, &file_size);
+    // fseek(new_memory_fp, 0, SEEK_SET);
+    // printf("file_size: %d\n", file_size);
+
+    // int loop_cnt = file_size / (page_size + sizeof(uint32));
+    // int offset;
+    // printf("loop_cnt: %d\n", loop_cnt);
+    // printf("memory_size: %lu\n", (*memory)->cur_page_count * (*memory)->num_bytes_per_page);
+    // for (int i = 0; i < loop_cnt; ++i) {
+    //     fread(&offset, sizeof(uint32), 1, new_memory_fp);
+    //     // printf("i: %d\n", offset);
+
+    //     uint8* addr = (*memory)->memory_data + (page_size * offset);
+    //     printf("offset: [%lu, %lu]\n", page_size * offset, page_size*offset+page_size);
+    //     fread(addr, page_size, 1, new_memory_fp);
+    // }
+    restore_dirty_memory(memory);
 
     // restore memory_data
-    fread((*memory)->memory_data, sizeof(uint8),
-            (*memory)->num_bytes_per_page * (*memory)->cur_page_count, memory_fp);
+    // fread((*memory)->memory_data, sizeof(uint8),
+    //         (*memory)->num_bytes_per_page * (*memory)->cur_page_count, memory_fp);
 
     fclose(memory_fp);
     fclose(mem_size_fp);
