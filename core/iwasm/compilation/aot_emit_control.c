@@ -202,6 +202,9 @@ handle_next_reachable_block(AOTCompContext *comp_ctx, AOTFuncContext *func_ctx,
                 *p_frame_ip = block->wasm_code_else + 1;
                 /* Push back the block */
                 aot_block_stack_push(&func_ctx->block_stack, block);
+                /* Recover parameters of else branch */
+                for (i = 0; i < block->param_count; i++)
+                    PUSH(block->else_param_phis[i], block->param_types[i]);
                 return true;
             }
             else if (block->llvm_end_block) {
@@ -218,6 +221,19 @@ handle_next_reachable_block(AOTCompContext *comp_ctx, AOTFuncContext *func_ctx,
 
     if (!block) {
         *p_frame_ip = frame_ip + 1;
+        return true;
+    }
+
+    if (block->label_type == LABEL_TYPE_IF && block->llvm_else_block
+        && !block->skip_wasm_code_else
+        && *p_frame_ip <= block->wasm_code_else) {
+        /* Clear value stack and start to translate else branch */
+        aot_value_stack_destroy(&block->value_stack);
+        /* Recover parameters of else branch */
+        for (i = 0; i < block->param_count; i++)
+            PUSH(block->else_param_phis[i], block->param_types[i]);
+        SET_BUILDER_POS(block->llvm_else_block);
+        *p_frame_ip = block->wasm_code_else + 1;
         return true;
     }
 
@@ -281,7 +297,7 @@ push_aot_block_to_stack_and_pass_params(AOTCompContext *comp_ctx,
                                         AOTBlock *block)
 {
     uint32 i, param_index;
-    LLVMValueRef value;
+    LLVMValueRef value, br_inst;
     uint64 size;
     char name[32];
     LLVMBasicBlockRef block_curr = CURR_BLOCK();
@@ -329,7 +345,14 @@ push_aot_block_to_stack_and_pass_params(AOTCompContext *comp_ctx,
                 }
             }
         }
-        SET_BUILDER_POS(block_curr);
+
+        /* At this point, the branch instruction was already built to jump to
+         * the new BB, to avoid generating zext instruction from the popped
+         * operand that would come after branch instruction, we should position
+         * the builder before the last branch instruction */
+        br_inst = LLVMGetLastInstruction(block_curr);
+        bh_assert(LLVMGetInstructionOpcode(br_inst) == LLVMBr);
+        LLVMPositionBuilderBefore(comp_ctx->builder, br_inst);
 
         /* Pop param values from current block's
          * value stack and add to param phis.
@@ -337,7 +360,9 @@ push_aot_block_to_stack_and_pass_params(AOTCompContext *comp_ctx,
         for (i = 0; i < block->param_count; i++) {
             param_index = block->param_count - 1 - i;
             POP(value, block->param_types[param_index]);
-            ADD_TO_PARAM_PHIS(block, value, param_index);
+            if (block->llvm_entry_block)
+                /* Only add incoming phis if the entry block was created */
+                ADD_TO_PARAM_PHIS(block, value, param_index);
             if (block->label_type == LABEL_TYPE_IF
                 && !block->skip_wasm_code_else) {
                 if (block->llvm_else_block) {
@@ -359,7 +384,17 @@ push_aot_block_to_stack_and_pass_params(AOTCompContext *comp_ctx,
 
     /* Push param phis to the new block */
     for (i = 0; i < block->param_count; i++) {
-        PUSH(block->param_phis[i], block->param_types[i]);
+        if (block->llvm_entry_block)
+            /* Push param phis if the entry basic block was created */
+            PUSH(block->param_phis[i], block->param_types[i]);
+        else {
+            bh_assert(block->label_type == LABEL_TYPE_IF
+                      && block->llvm_else_block && block->else_param_phis
+                      && !block->skip_wasm_code_else);
+            /* Push else param phis if we start to translate the
+               else branch */
+            PUSH(block->else_param_phis[i], block->param_types[i]);
+        }
     }
 
     return true;

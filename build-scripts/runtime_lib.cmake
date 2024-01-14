@@ -133,6 +133,11 @@ if (WAMR_BUILD_DEBUG_INTERP EQUAL 1)
     endif ()
 endif ()
 
+set (WAMR_BUILD_MIGRATION 1)
+if (WAMR_BUILD_MIGRATION EQUAL 1)
+    include (${IWASM_DIR}/migration/migration.cmake)
+endif()
+
 if (WAMR_BUILD_THREAD_MGR EQUAL 1)
     include (${IWASM_DIR}/libraries/thread-mgr/thread_mgr.cmake)
 endif ()
@@ -165,7 +170,11 @@ file (GLOB header
 )
 LIST (APPEND RUNTIME_LIB_HEADER_LIST ${header})
 
-enable_language (ASM)
+if (WAMR_BUILD_PLATFORM STREQUAL "windows")
+    enable_language (ASM_MASM)
+else()
+    enable_language (ASM)
+endif()
 
 include (${SHARED_PLATFORM_CONFIG})
 include (${SHARED_DIR}/mem-alloc/mem_alloc.cmake)
@@ -194,6 +203,7 @@ set (source_all
     ${LIBC_EMCC_SOURCE}
     ${LIB_RATS_SOURCE}
     ${DEBUG_ENGINE_SOURCE}
+    ${MIGRATION_SOURCE}
 )
 
 set (WAMR_RUNTIME_LIB_SOURCE ${source_all})

@@ -12,6 +12,7 @@
 #include "llvm-c/Target.h"
 #include "llvm-c/Core.h"
 #include "llvm-c/Object.h"
+#include "llvm-c/OrcEE.h"
 #include "llvm-c/ExecutionEngine.h"
 #include "llvm-c/Analysis.h"
 #include "llvm-c/BitWriter.h"
@@ -320,10 +321,10 @@ typedef struct AOTCompContext {
     /* Bulk memory feature */
     bool enable_bulk_memory;
 
-    /* Bounday Check */
+    /* Boundary Check */
     bool enable_bound_check;
 
-    /* Native stack bounday Check */
+    /* Native stack boundary Check */
     bool enable_stack_bound_check;
 
     /* Native stack usage estimation */
@@ -355,6 +356,10 @@ typedef struct AOTCompContext {
 
     /* Enable LLVM PGO (Profile-Guided Optimization) */
     bool enable_llvm_pgo;
+
+    /* Treat unknown import function as wasm-c-api import function
+       and allow to directly invoke it from AOT/JIT code */
+    bool quick_invoke_c_api_import;
 
     /* Use profile file collected by LLVM PGO */
     char *use_prof_file;
@@ -422,6 +427,8 @@ typedef struct AOTCompContext {
     char stack_usage_temp_file[64];
     const char *llvm_passes;
     const char *builtin_intrinsics;
+
+    bool emit_frame_pointer;
 } AOTCompContext;
 
 enum {
@@ -431,6 +438,7 @@ enum {
     AOT_LLVMIR_OPT_FILE,
 };
 
+/* always sync it with AOTCompOption in aot_export.h */
 typedef struct AOTCompOption {
     bool is_jit_mode;
     bool is_indirect_mode;
@@ -450,6 +458,7 @@ typedef struct AOTCompOption {
     bool disable_llvm_lto;
     bool enable_llvm_pgo;
     bool enable_stack_estimation;
+    bool quick_invoke_c_api_import;
     char *use_prof_file;
     uint32 opt_level;
     uint32 size_level;

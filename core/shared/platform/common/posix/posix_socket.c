@@ -5,6 +5,7 @@
 
 #include "platform_api_vmcore.h"
 #include "platform_api_extension.h"
+#include "libc_errno.h"
 
 #include <arpa/inet.h>
 #include <netdb.h>
@@ -308,11 +309,13 @@ os_socket_close(bh_socket_t socket)
     return BHT_OK;
 }
 
-int
+__wasi_errno_t
 os_socket_shutdown(bh_socket_t socket)
 {
-    shutdown(socket, O_RDWR);
-    return BHT_OK;
+    if (shutdown(socket, O_RDWR) != 0) {
+        return convert_errno(errno);
+    }
+    return __WASI_ESUCCESS;
 }
 
 int
@@ -799,7 +802,7 @@ os_socket_set_ip_add_membership(bh_socket_t socket,
 {
     assert(imr_multiaddr);
     if (is_ipv6) {
-#ifdef IPPROTO_IPV6
+#if defined(IPPROTO_IPV6) && !defined(BH_PLATFORM_COSMOPOLITAN)
         struct ipv6_mreq mreq;
         for (int i = 0; i < 8; i++) {
             ((uint16_t *)mreq.ipv6mr_multiaddr.s6_addr)[i] =
@@ -837,7 +840,7 @@ os_socket_set_ip_drop_membership(bh_socket_t socket,
 {
     assert(imr_multiaddr);
     if (is_ipv6) {
-#ifdef IPPROTO_IPV6
+#if defined(IPPROTO_IPV6) && !defined(BH_PLATFORM_COSMOPOLITAN)
         struct ipv6_mreq mreq;
         for (int i = 0; i < 8; i++) {
             ((uint16_t *)mreq.ipv6mr_multiaddr.s6_addr)[i] =

@@ -8,6 +8,8 @@
 
 #ifndef SGX_DISABLE_WASI
 
+#include "libc_errno.h"
+
 #define TRACE_OCALL_FAIL() os_printf("ocall %s failed!\n", __FUNCTION__)
 
 /** OCALLs prototypes **/
@@ -855,10 +857,13 @@ os_socket_send_to(bh_socket_t socket, const void *buf, unsigned int len,
     return ret;
 }
 
-int
+__wasi_errno_t
 os_socket_shutdown(bh_socket_t socket)
 {
-    return shutdown(socket, O_RDWR);
+    if (shutdown(socket, O_RDWR) != 0) {
+        return convert_errno(errno);
+    }
+    return __WASI_ESUCCESS;
 }
 
 int

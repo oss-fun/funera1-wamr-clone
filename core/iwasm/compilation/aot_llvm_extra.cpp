@@ -36,6 +36,7 @@
 #include <llvm/Support/ErrorHandling.h>
 #if LLVM_VERSION_MAJOR >= 17
 #include <llvm/Support/PGOOptions.h>
+#include <llvm/Support/VirtualFileSystem.h>
 #endif
 #include <llvm/Target/CodeGenCWrappers.h>
 #include <llvm/Target/TargetMachine.h>
@@ -44,6 +45,7 @@
 #include <llvm/Transforms/Vectorize/LoopVectorize.h>
 #include <llvm/Transforms/Vectorize/LoadStoreVectorizer.h>
 #include <llvm/Transforms/Vectorize/SLPVectorizer.h>
+#include <llvm/Transforms/Vectorize/VectorCombine.h>
 #include <llvm/Transforms/Scalar/LoopRotation.h>
 #include <llvm/Transforms/Scalar/SimpleLoopUnswitch.h>
 #include <llvm/Transforms/Scalar/LICM.h>
@@ -203,19 +205,27 @@ aot_apply_llvm_new_pass_manager(AOTCompContext *comp_ctx, LLVMModuleRef module)
     Optional<PGOOptions> PGO = llvm::None;
 #endif
 
-// TODO
-#if LLVM_VERSION_MAJOR < 17
     if (comp_ctx->enable_llvm_pgo) {
         /* Disable static counter allocation for value profiler,
            it will be allocated by runtime */
         const char *argv[] = { "", "-vp-static-alloc=false" };
         cl::ParseCommandLineOptions(2, argv);
+#if LLVM_VERSION_MAJOR < 17
         PGO = PGOOptions("", "", "", PGOOptions::IRInstr);
+#else
+        auto FS = vfs::getRealFileSystem();
+        PGO = PGOOptions("", "", "", "", FS, PGOOptions::IRInstr);
+#endif
     }
     else if (comp_ctx->use_prof_file) {
+#if LLVM_VERSION_MAJOR < 17
         PGO = PGOOptions(comp_ctx->use_prof_file, "", "", PGOOptions::IRUse);
-    }
+#else
+        auto FS = vfs::getRealFileSystem();
+        PGO = PGOOptions(comp_ctx->use_prof_file, "", "", "", FS,
+                         PGOOptions::IRUse);
 #endif
+    }
 
 #ifdef DEBUG_PASS
     PassInstrumentationCallbacks PIC;
@@ -306,8 +316,11 @@ aot_apply_llvm_new_pass_manager(AOTCompContext *comp_ctx, LLVMModuleRef module)
     }
 
     ModulePassManager MPM;
+
     if (comp_ctx->is_jit_mode) {
         const char *Passes =
+            "loop-vectorize,slp-vectorizer,"
+            "load-store-vectorizer,vector-combine,"
             "mem2reg,instcombine,simplifycfg,jump-threading,indvars";
         ExitOnErr(PB.parsePassPipeline(MPM, Passes));
     }
@@ -318,6 +331,7 @@ aot_apply_llvm_new_pass_manager(AOTCompContext *comp_ctx, LLVMModuleRef module)
         FPM.addPass(LoopVectorizePass());
         FPM.addPass(SLPVectorizerPass());
         FPM.addPass(LoadStoreVectorizerPass());
+        FPM.addPass(VectorCombinePass());
 
         if (comp_ctx->enable_llvm_pgo || comp_ctx->use_prof_file) {
             /* LICM pass: loop invariant code motion, attempting to remove
@@ -343,18 +357,29 @@ aot_apply_llvm_new_pass_manager(AOTCompContext *comp_ctx, LLVMModuleRef module)
             ExitOnErr(PB.parsePassPipeline(MPM, comp_ctx->llvm_passes));
         }
 
-        if (!disable_llvm_lto) {
-            /* Apply LTO for AOT mode */
-            if (comp_ctx->comp_data->func_count >= 10
-                || comp_ctx->enable_llvm_pgo || comp_ctx->use_prof_file)
-                /* Add the pre-link optimizations if the func count
-                   is large enough or PGO is enabled */
-                MPM.addPass(PB.buildLTOPreLinkDefaultPipeline(OL));
-            else
-                MPM.addPass(PB.buildLTODefaultPipeline(OL, NULL));
+        if (
+#if LLVM_VERSION_MAJOR <= 13
+            PassBuilder::OptimizationLevel::O0 == OL
+#else
+            OptimizationLevel::O0 == OL
+#endif
+        ) {
+            MPM.addPass(PB.buildO0DefaultPipeline(OL));
         }
         else {
-            MPM.addPass(PB.buildPerModuleDefaultPipeline(OL));
+            if (!disable_llvm_lto) {
+                /* Apply LTO for AOT mode */
+                if (comp_ctx->comp_data->func_count >= 10
+                    || comp_ctx->enable_llvm_pgo || comp_ctx->use_prof_file)
+                    /* Add the pre-link optimizations if the func count
+                       is large enough or PGO is enabled */
+                    MPM.addPass(PB.buildLTOPreLinkDefaultPipeline(OL));
+                else
+                    MPM.addPass(PB.buildLTODefaultPipeline(OL, NULL));
+            }
+            else {
+                MPM.addPass(PB.buildPerModuleDefaultPipeline(OL));
+            }
         }
 
         /* Run specific passes for AOT indirect mode in last since general
@@ -384,7 +409,10 @@ aot_compress_aot_func_names(AOTCompContext *comp_ctx, uint32 *p_size)
         NameStrs.push_back(str);
     }
 
-    if (collectPGOFuncNameStrings(NameStrs, true, Result)) {
+#if LLVM_VERSION_MAJOR < 18
+#define collectGlobalObjectNameStrings collectPGOFuncNameStrings
+#endif
+    if (collectGlobalObjectNameStrings(NameStrs, true, Result)) {
         aot_set_last_error("collect pgo func name strings failed");
         return NULL;
     }
