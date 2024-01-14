@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <time.h>
 
 #include "../interpreter/wasm_runtime.h"
 #include "wasm_migration.h"
@@ -12,6 +13,13 @@
         if (*p & 0x80)p++;              \
         else break;                     \
     }                                   \
+
+int64_t get_time(struct timespec ts1, struct timespec ts2) {
+  int64_t sec = ts2.tv_sec - ts1.tv_sec;
+  int64_t nsec = ts2.tv_nsec - ts1.tv_nsec;
+  // std::cerr << sec << ", " << nsec << std::endl;
+  return sec * 1e9 + nsec;
+}
 
 /* common_functions */
 int dump_value(void *ptr, size_t size, size_t nmemb, FILE *stream) {
@@ -95,9 +103,83 @@ int get_opcode_offset(uint8 *ip, uint8 *ip_lim) {
     return cnt;
 }
 
+// TODO: コードごちゃごちゃで読めないので、整理する
+uint8* get_type_stack(uint32 fidx, uint32 offset, uint32* type_stack_size, bool is_return_address) {
+    FILE *tablemap_func = fopen("tablemap_func", "rb");
+    if (!tablemap_func) printf("not found tablemap_func\n");
+    FILE *tablemap_offset = fopen("tablemap_offset", "rb");
+    if (!tablemap_func) printf("not found tablemap_offset\n");
+    FILE *type_table = fopen("type_table", "rb");
+    if (!tablemap_func) printf("not found type_table\n");
+    
+    /// tablemap_func
+    fseek(tablemap_func, fidx*sizeof(uint32)*3, SEEK_SET);
+    uint32 ffidx;
+    uint64 tablemap_offset_addr;
+    fread(&ffidx, sizeof(uint32), 1, tablemap_func);
+    if (fidx != ffidx) {
+        perror("tablemap_funcがおかしい\n");
+        exit(1);
+    }
+    fread(&tablemap_offset_addr, sizeof(uint64), 1, tablemap_func);
+
+    /// tablemap_offset
+    fseek(tablemap_offset, tablemap_offset_addr, SEEK_SET);
+    // 関数fidxのローカルを取得
+    uint32 locals_size;
+    fread(&locals_size, sizeof(uint32), 1, tablemap_offset);
+    uint8 locals[locals_size];
+    fread(locals, sizeof(uint8), locals_size, tablemap_offset);
+    // 対応するoffsetまで移動
+    uint32 ooffset;
+    uint64 type_table_addr, pre_type_table_addr;
+    while(!feof(tablemap_offset)) {
+       fread(&ooffset, sizeof(uint32), 1, tablemap_offset); 
+       fread(&type_table_addr, sizeof(uint64), 1, tablemap_offset); 
+       if (offset == ooffset) break;
+       pre_type_table_addr = type_table_addr;
+    }
+    if (feof(tablemap_offset)) {
+        perror("tablemap_offsetがおかしい\n");
+        exit(1);
+    }
+    // type_table_addr = pre_type_table_addr;
+
+    /// type_table
+    fseek(type_table, type_table_addr, SEEK_SET);
+    uint32 stack_size;
+    fread(&stack_size, sizeof(uint32), 1, type_table);
+    uint8 stack[stack_size];
+    fread(stack, sizeof(uint8), stack_size, type_table);
+
+    if (is_return_address) {
+        fread(&stack_size, sizeof(uint32), 1, type_table);
+        fread(stack, sizeof(uint8), stack_size, type_table);
+    }
+
+    // uint8 type_stack[locals_size + stack_size];
+    uint8* type_stack = malloc(locals_size + stack_size);
+    for (uint32 i = 0; i < locals_size; ++i) type_stack[i] = locals[i];
+    for (uint32 i = 0; i < stack_size; ++i) type_stack[locals_size + i] = stack[i];
+
+    // printf("new type stack: [");
+    // for (uint32 i = 0; i < locals_size + stack_size; ++i) {
+    //     if (i+1 == locals_size + stack_size)printf("%d", type_stack[i]);
+    //     else                                printf("%d, ", type_stack[i]);
+    // }
+    // printf("]\n");
+
+    fclose(tablemap_func);
+    fclose(tablemap_offset);
+    fclose(type_table);
+
+    *type_stack_size = locals_size + stack_size;
+    return type_stack;
+}
+
 /* wasm_dump */
 static void
-_dump_stack(WASMExecEnv *exec_env, struct WASMInterpFrame *frame, struct FILE *fp)
+_dump_stack(WASMExecEnv *exec_env, struct WASMInterpFrame *frame, struct FILE *fp, bool is_top)
 {
     int i;
     WASMModuleInstance *module = exec_env->module_inst;
@@ -121,6 +203,12 @@ _dump_stack(WASMExecEnv *exec_env, struct WASMInterpFrame *frame, struct FILE *f
     fwrite(&full_type_stack_size, sizeof(uint32), 1, fp);
 
     // 型スタックの中身
+    uint32 type_stack_size_from_file;
+    uint32 fidx_now = frame->function - module->e->functions;
+    uint32 offset_now = frame->ip - wasm_get_func_code(frame->function);
+    // printf("[DEBUG]now addr: (%d, %d)\n", fidx_now, offset_now);
+    uint8* type_stack_from_file = get_type_stack(fidx_now, offset_now, &type_stack_size_from_file, !is_top);
+
     uint8 type_stack_locals[locals];
     // TODO: ここの実装バグの温床なので、なんとかする
     uint32 *lp = frame->lp;
@@ -157,12 +245,28 @@ _dump_stack(WASMExecEnv *exec_env, struct WASMInterpFrame *frame, struct FILE *f
     }
     fwrite(&type_stack_locals, sizeof(uint8), locals, fp);
 
+    uint8 type_stack[full_type_stack_size];
+    for (i = 0; i < locals; ++i) type_stack[i] = type_stack_locals[i];
     // TODO: type_stackをuint8*にする
     uint32* tsp_bottom = frame->tsp_bottom;
     for (i = 0; i < type_stack_size; ++i) {
         uint8 type = tsp_bottom[i];
+        type_stack[locals+i] = type;
         fwrite(&type, sizeof(uint8), 1, fp);
     }
+
+    // 内部で持っているtype_stackと索引してきたtype_stackが一致するかチェック
+    if (full_type_stack_size != type_stack_size_from_file) {
+        printf("[ERROR] type_stackのサイズが異なる. %d != %d\n", full_type_stack_size, type_stack_size_from_file);
+    }
+    else {
+        for (i = 0; i < full_type_stack_size; ++i) {
+            if (type_stack[i] != type_stack_from_file[i]) {
+                printf("[ERROR] type_stackが異なる\n");
+            }
+        }
+    }
+    free(type_stack_from_file);
 
     // 値スタックの中身
     uint32 local_cell_num = func->param_cell_num + func->local_cell_num;
@@ -224,7 +328,7 @@ wasm_dump_stack(WASMExecEnv *exec_env, struct WASMInterpFrame *frame)
         uint32 entry_fidx = frame->function - module->e->functions;
         fwrite(&entry_fidx, sizeof(uint32), 1, fp);
 
-        _dump_stack(exec_env, frame, fp);
+        _dump_stack(exec_env, frame, fp, (i==1));
         fclose(fp);
     } while(frame = frame->prev_frame);
 
@@ -325,29 +429,42 @@ int wasm_dump(WASMExecEnv *exec_env,
          bool done_flag)
 {
     int rc;
+    struct timespec ts1, ts2;
     // dump linear memory
+    clock_gettime(CLOCK_MONOTONIC, &ts1);
     rc = wasm_dump_memory(memory);
+    clock_gettime(CLOCK_MONOTONIC, &ts2);
+    fprintf(stderr, "memory, %lu\n", get_time(ts1, ts2));
     if (rc < 0) {
         LOG_ERROR("Failed to dump linear memory\n");
         return rc;
     }
 
     // dump globals
+    clock_gettime(CLOCK_MONOTONIC, &ts1);
     rc = wasm_dump_global(module, globals, global_data);
+    clock_gettime(CLOCK_MONOTONIC, &ts2);
+    fprintf(stderr, "global, %lu\n", get_time(ts1, ts2));
     if (rc < 0) {
         LOG_ERROR("Failed to dump globals\n");
         return rc;
     }
 
     // dump program counter
+    clock_gettime(CLOCK_MONOTONIC, &ts1);
     rc = wasm_dump_program_counter(module, cur_func, frame_ip);
+    clock_gettime(CLOCK_MONOTONIC, &ts2);
+    fprintf(stderr, "program counter, %lu\n", get_time(ts1, ts2));
     if (rc < 0) {
         LOG_ERROR("Failed to dump program_counter\n");
         return rc;
     }
 
-    // dump frame
+    // dump stack
+    clock_gettime(CLOCK_MONOTONIC, &ts1);
     rc = wasm_dump_stack(exec_env, frame);
+    clock_gettime(CLOCK_MONOTONIC, &ts2);
+    fprintf(stderr, "stack, %lu\n", get_time(ts1, ts2));
     if (rc < 0) {
         LOG_ERROR("Failed to dump frame\n");
         return rc;
