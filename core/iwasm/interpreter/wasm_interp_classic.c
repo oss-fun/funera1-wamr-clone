@@ -1331,6 +1331,7 @@ wasm_interp_call_func_bytecode(WASMModuleInstance *module,
     signal(SIGINT, &wasm_interp_sigint);
 
     if (get_restore_flag()) {
+        printf("[DEBUG]restore\n");
         // bool done_flag;
         int rc;
 

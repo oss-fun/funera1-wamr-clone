@@ -236,67 +236,6 @@ wasm_dump_stack(WASMExecEnv *exec_env, struct WASMInterpFrame *frame)
     return 0;
 }
 
-int is_page_dirty(const void *virtaddr) {
-#define PAGEMAP_LENGTH 8
-    int fd;
-    char path[64];
-    int page_size = sysconf(_SC_PAGESIZE);
-    uint64 pagemap_entry;
-
-    // プロセスのpagemapを開く
-    fd = open("/proc/self/pagemap", O_RDONLY);
-    if (fd == -1) {
-        perror("Error opening pagemap");
-        return -1;
-    }
-
-    // pfnに対応するpagemapエントリを取得
-    unsigned long pfn = (unsigned long)virtaddr / page_size;
-    off_t offset = sizeof(uint64) * pfn;
-    if (lseek(fd, offset, SEEK_SET) == -1) {
-        perror("Error seeking to pagemap entry");
-        close(fd);
-        return -1;
-    }
-
-    if (read(fd, &pagemap_entry, PAGEMAP_LENGTH) != PAGEMAP_LENGTH) {
-        perror("Error reading pagemap entry");
-        close(fd);
-        return -1;
-    }
-
-    // ページのdirtyビットを確認
-    int is_dirty = (pagemap_entry 
-                    & ((1ULL << 55) | (1ULL << 62) | (1ULL << 63)) != 0);
-
-    close(fd);
-    return is_dirty;
-}
-int do_task_reset_dirty_track()
-{
-	int fd, ret;
-	char cmd[] = "4";
-
-    fd = open("/proc/self/clear_refs", O_RDWR);
-
-	if (fd < 0)
-		return errno == EACCES ? 1 : -1;
-
-	ret = write(fd, cmd, sizeof(cmd));
-	if (ret < 0) {
-		if (errno == EINVAL) /* No clear-soft-dirty in kernel */
-			ret = 1;
-		else {
-			ret = -1;
-		}
-	} else {
-		ret = 0;
-	}
-
-	close(fd);
-	return ret;
-}
-
 int is_dirty(uint64 pagemap_entry) {
     return (pagemap_entry>>62&1) | (pagemap_entry>>63&1);
     // return (pagemap_entry 
@@ -313,7 +252,7 @@ int dump_dirty_memory(WASMMemoryInstance *memory) {
     FILE *new_memory_fp = open_image("memory.img", "wb");
     int fd;
     uint64 pagemap_entry;
-
+            // printf("[%x, %x]: dirty page\n", i*PAGE_SIZE, (i+1)*PAGE_SIZE);
     // プロセスのpagemapを開く
     fd = open("/proc/self/pagemap", O_RDONLY);
     if (fd == -1) {
@@ -329,8 +268,6 @@ int dump_dirty_memory(WASMMemoryInstance *memory) {
         close(fd);
         return -1;
     }
-
-    // printf("swapped, present\n", pagemap_entry>>62, pagemap_entry>>63);
 
     uint8* memory_data = memory->memory_data;
     uint8* memory_data_end = memory->memory_data_end;
@@ -353,9 +290,13 @@ int dump_dirty_memory(WASMMemoryInstance *memory) {
 
         // dirty pageのみdump
         if (is_dirty(pagemap_entry)) {
+<<<<<<< Updated upstream
             // printf("[%x, %x]: dirty page\n", i*PAGE_SIZE, (i+1)*PAGE_SIZE);
             uint32 offset = (uint64)addr - (uint64)memory_data;
             // printf("i: %d\n", offset);
+=======
+            uint32 offset = addr - memory_data;
+>>>>>>> Stashed changes
             fwrite(&offset, sizeof(uint32), 1, new_memory_fp);
             fwrite(addr, PAGE_SIZE, 1, new_memory_fp);
         }
@@ -370,19 +311,9 @@ int wasm_dump_memory(WASMMemoryInstance *memory) {
     FILE *memory_fp = open_image("all_memory.img", "wb");
     FILE *mem_size_fp = open_image("mem_page_count.img", "wb");
 
-    // WASMMemoryInstance *memory = module->default_memory;
-    // uint8* memory_data = memory->memory_data;
-    // uint8* memory_data_end = memory->memory_data_end;
-    // int page_size = sysconf(_SC_PAGESIZE);
-    // uint32 i = 0;
-    // for (uint8* addr = memory_data; addr < memory_data_end; addr += page_size, ++i) {
-    //     if (is_page_dirty(addr)) {
-    //         fwrite(&i, sizeof(uint32), 1, new_memory_fp);
-    //         fwrite(addr, page_size, 1, new_memory_fp);
-    //     }
-    // }
     dump_dirty_memory(memory);
 
+    // デバッグのために、すべてのメモリも保存
     fwrite(memory->memory_data, sizeof(uint8),
            memory->num_bytes_per_page * memory->cur_page_count, memory_fp);
 
