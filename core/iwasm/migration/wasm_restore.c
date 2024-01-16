@@ -302,7 +302,7 @@ void restore_dirty_memory(WASMMemoryInstance **memory) {
     // for (int i = 0; i < loop_cnt; ++i) {
     while (!feof(new_memory_fp)) {
         if (feof(new_memory_fp)) break;
-        uint64 offset;
+        uint32 offset;
         uint32 len;
         len = fread(&offset, sizeof(uint32), 1, new_memory_fp);
         if (len == 0) break;

@@ -354,7 +354,7 @@ int dump_dirty_memory(WASMMemoryInstance *memory) {
         // dirty pageのみdump
         if (is_dirty(pagemap_entry)) {
             // printf("[%x, %x]: dirty page\n", i*PAGE_SIZE, (i+1)*PAGE_SIZE);
-            uint32 offset = addr - memory_data;
+            uint32 offset = (uint64)addr - (uint64)memory_data;
             // printf("i: %d\n", offset);
             fwrite(&offset, sizeof(uint32), 1, new_memory_fp);
             fwrite(addr, PAGE_SIZE, 1, new_memory_fp);
