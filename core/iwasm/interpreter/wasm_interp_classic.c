@@ -2233,8 +2233,6 @@ migration_async:
                 frame_sp--;
                 frame_tsp--;
                 addr = POP_I32();
-                // printf("addr: %p\n", addr);
-                // printf("[DEBUG]Memory Base Addr: %u\n", addr);
                 CHECK_MEMORY_OVERFLOW(4);
                 STORE_U32(maddr, frame_sp[1]);
                 CHECK_WRITE_WATCHPOINT(addr, offset);
@@ -2252,7 +2250,6 @@ migration_async:
                 frame_sp -= 2;
                 frame_tsp--;
                 addr = POP_I32();
-                // printf("[DEBUG]Memory Base Addr: %u\n", addr);
                 CHECK_MEMORY_OVERFLOW(8);
                 PUT_I64_TO_ADDR((uint32 *)maddr,
                                 GET_I64_FROM_ADDR(frame_sp + 1));

@@ -285,21 +285,8 @@ wasm_restore_stack(WASMExecEnv **_exec_env)
     return frame;
 }
 
-void restore_dirty_memory(WASMMemoryInstance **memory) {
-    // int page_size = sysconf(_SC_PAGESIZE);
-#define PAGE_SIZE 4096
-    FILE* memory_fp = open_image("memory.img", "rb");
-    // int file_size;
-    // fseek(new_memory_fp, 0, SEEK_END);
-    // fgetpos(new_memory_fp, &file_size);
-    // fseek(new_memory_fp, 0, SEEK_SET);
-    // printf("file_size: %d\n", file_size);
-
-    // int loop_cnt = file_size / (page_size + sizeof(uint32));
-    // int offset;
-    // printf("loop_cnt: %d\n", loop_cnt);
-    // printf("memory_size: %lu\n", (*memory)->cur_page_count * (*memory)->num_bytes_per_page);
-    // for (int i = 0; i < loop_cnt; ++i) {
+void restore_dirty_memory(WASMMemoryInstance **memory, FILE* memory_fp) {
+    const int PAGE_SIZE = 4096;
     while (!feof(memory_fp)) {
         if (feof(memory_fp)) break;
         uint32 offset;
@@ -326,7 +313,7 @@ int wasm_restore_memory(WASMModuleInstance *module, WASMMemoryInstance **memory,
     wasm_enlarge_memory(module, page_count- (*memory)->cur_page_count);
     *maddr = page_count * (*memory)->num_bytes_per_page;
     
-    restore_dirty_memory(memory);
+    restore_dirty_memory(memory, memory_fp);
 
     // restore memory_data
     // fread((*memory)->memory_data, sizeof(uint8),
