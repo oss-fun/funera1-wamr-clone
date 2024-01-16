@@ -300,7 +300,6 @@ void restore_dirty_memory(WASMMemoryInstance **memory, FILE* memory_fp) {
         len = fread(addr, PAGE_SIZE, 1, memory_fp);
         // printf("PAGESIZE: %d\n", len);
     }
-    fclose(memory_fp);
 }
 
 int wasm_restore_memory(WASMModuleInstance *module, WASMMemoryInstance **memory, uint8** maddr) {

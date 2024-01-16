@@ -243,16 +243,11 @@ int is_dirty(uint64 pagemap_entry) {
 }
 
 int dump_dirty_memory(WASMMemoryInstance *memory) {
-#define PAGEMAP_LENGTH 8
-#define PAGE_SIZE 4096
-
-    // soft dirtyをreset
-    // do_task_reset_dirty_track();
-
-    FILE *new_memory_fp = open_image("memory.img", "wb");
+    const int PAGEMAP_LENGTH = 8;
+    const int PAGE_SIZE = 4096;
+    FILE *memory_fp = open_image("memory.img", "wb");
     int fd;
     uint64 pagemap_entry;
-            // printf("[%x, %x]: dirty page\n", i*PAGE_SIZE, (i+1)*PAGE_SIZE);
     // プロセスのpagemapを開く
     fd = open("/proc/self/pagemap", O_RDONLY);
     if (fd == -1) {
@@ -286,21 +281,20 @@ int dump_dirty_memory(WASMMemoryInstance *memory) {
             close(fd);
             return -1;
         }
-        // printf("[%x, %x]: %d, %d\n", i*PAGE_SIZE, (i+1)*PAGE_SIZE, pagemap_entry>>62&1, pagemap_entry>>63&1);
 
         // dirty pageのみdump
         if (is_dirty(pagemap_entry)) {
             // printf("[%x, %x]: dirty page\n", i*PAGE_SIZE, (i+1)*PAGE_SIZE);
             uint32 offset = (uint64)addr - (uint64)memory_data;
             // printf("i: %d\n", offset);
-            fwrite(&offset, sizeof(uint32), 1, new_memory_fp);
-            fwrite(addr, PAGE_SIZE, 1, new_memory_fp);
+            fwrite(&offset, sizeof(uint32), 1, memory_fp);
+            fwrite(addr, PAGE_SIZE, 1, memory_fp);
         }
     }
 
     close(fd);
-    fclose(new_memory_fp);
-    return is_dirty;
+    fclose(memory_fp);
+    return 0;
 }
 
 int wasm_dump_memory(WASMMemoryInstance *memory) {
