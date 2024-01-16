@@ -238,8 +238,10 @@ wasm_dump_stack(WASMExecEnv *exec_env, struct WASMInterpFrame *frame)
 
 int is_dirty(uint64 pagemap_entry) {
     return (pagemap_entry>>62&1) | (pagemap_entry>>63&1);
-    // return (pagemap_entry 
-    //             & (1ULL << 55 | 1ULL << 62 | 1ULL << 63) != 0);
+}
+
+int is_soft_dirty(uint64 pagemap_entry) {
+    return (pagemap_entry >> 55 & 1);
 }
 
 int dump_dirty_memory(WASMMemoryInstance *memory) {
@@ -283,7 +285,8 @@ int dump_dirty_memory(WASMMemoryInstance *memory) {
         }
 
         // dirty pageのみdump
-        if (is_dirty(pagemap_entry)) {
+        // if (is_dirty(pagemap_entry)) {
+        if (is_soft_dirty(pagemap_entry)) {
             // printf("[%x, %x]: dirty page\n", i*PAGE_SIZE, (i+1)*PAGE_SIZE);
             uint32 offset = (uint64)addr - (uint64)memory_data;
             // printf("i: %d\n", offset);
