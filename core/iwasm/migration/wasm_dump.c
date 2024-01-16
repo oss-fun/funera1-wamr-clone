@@ -310,7 +310,7 @@ int dump_dirty_memory(WASMMemoryInstance *memory) {
     // soft dirtyをreset
     // do_task_reset_dirty_track();
 
-    FILE *new_memory_fp = open_image("new_memory.img", "wb");
+    FILE *new_memory_fp = open_image("memory.img", "wb");
     int fd;
     uint64 pagemap_entry;
 
@@ -354,9 +354,9 @@ int dump_dirty_memory(WASMMemoryInstance *memory) {
         // dirty pageのみdump
         if (is_dirty(pagemap_entry)) {
             // printf("[%x, %x]: dirty page\n", i*PAGE_SIZE, (i+1)*PAGE_SIZE);
-            uint64 offset = addr - memory_data;
+            uint32 offset = addr - memory_data;
             // printf("i: %d\n", offset);
-            fwrite(&offset, sizeof(uint64), 1, new_memory_fp);
+            fwrite(&offset, sizeof(uint32), 1, new_memory_fp);
             fwrite(addr, PAGE_SIZE, 1, new_memory_fp);
         }
     }
@@ -367,7 +367,7 @@ int dump_dirty_memory(WASMMemoryInstance *memory) {
 }
 
 int wasm_dump_memory(WASMMemoryInstance *memory) {
-    FILE *memory_fp = open_image("memory.img", "wb");
+    FILE *memory_fp = open_image("all_memory.img", "wb");
     FILE *mem_size_fp = open_image("mem_page_count.img", "wb");
 
     // WASMMemoryInstance *memory = module->default_memory;

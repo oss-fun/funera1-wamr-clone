@@ -288,7 +288,7 @@ wasm_restore_stack(WASMExecEnv **_exec_env)
 void restore_dirty_memory(WASMMemoryInstance **memory) {
     // int page_size = sysconf(_SC_PAGESIZE);
 #define PAGE_SIZE 4096
-    FILE* new_memory_fp = open_image("new_memory.img", "rb");
+    FILE* new_memory_fp = open_image("memory.img", "rb");
     // int file_size;
     // fseek(new_memory_fp, 0, SEEK_END);
     // fgetpos(new_memory_fp, &file_size);
@@ -304,7 +304,7 @@ void restore_dirty_memory(WASMMemoryInstance **memory) {
         if (feof(new_memory_fp)) break;
         uint64 offset;
         uint32 len;
-        len = fread(&offset, sizeof(uint64), 1, new_memory_fp);
+        len = fread(&offset, sizeof(uint32), 1, new_memory_fp);
         if (len == 0) break;
         // printf("len: %d\n", len);
         // printf("i: %d\n", offset);
