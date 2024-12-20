@@ -176,8 +176,9 @@ acquire_wait_info(void *address, AtomicWaitNode *wait_node)
     AtomicWaitInfo *wait_info = NULL;
     bh_list_status ret;
 
-    if (address)
-        wait_info = (AtomicWaitInfo *)bh_hash_map_find(wait_map, address);
+    bh_assert(address != NULL);
+
+    wait_info = (AtomicWaitInfo *)bh_hash_map_find(wait_map, address);
 
     if (!wait_node) {
         return wait_info;
@@ -231,14 +232,14 @@ destroy_wait_info(void *wait_info)
 }
 
 static void
-map_try_release_wait_info(HashMap *wait_map_, AtomicWaitInfo *wait_info,
+map_try_release_wait_info(HashMap *wait_hash_map, AtomicWaitInfo *wait_info,
                           void *address)
 {
     if (wait_info->wait_list->len > 0) {
         return;
     }
 
-    bh_hash_map_remove(wait_map_, address, NULL, NULL);
+    bh_hash_map_remove(wait_hash_map, address, NULL, NULL);
     destroy_wait_info(wait_info);
 }
 
@@ -332,7 +333,7 @@ wasm_runtime_atomic_wait(WASMModuleInstanceCommon *module, void *address,
 
     while (1) {
         if (timeout < 0) {
-            /* wait forever until it is notified or terminatied
+            /* wait forever until it is notified or terminated
                here we keep waiting and checking every second */
             os_cond_reltimedwait(&wait_node->wait_cond, lock,
                                  (uint64)timeout_1sec);

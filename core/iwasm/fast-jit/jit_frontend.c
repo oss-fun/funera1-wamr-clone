@@ -97,9 +97,9 @@ jit_frontend_get_table_inst_offset(const WASMModule *module, uint32 tbl_idx)
 
         offset += (uint32)offsetof(WASMTableInstance, elems);
 #if WASM_ENABLE_MULTI_MODULE != 0
-        offset += (uint32)sizeof(uint32) * table->max_size;
+        offset += (uint32)sizeof(table_elem_type_t) * table->max_size;
 #else
-        offset += (uint32)sizeof(uint32)
+        offset += (uint32)sizeof(table_elem_type_t)
                   * (table->possible_grow ? table->max_size : table->init_size);
 #endif
 
@@ -194,12 +194,15 @@ JitReg
 get_aux_stack_bound_reg(JitFrame *frame)
 {
     JitCompContext *cc = frame->cc;
+    JitReg tmp = jit_cc_new_reg_I32(cc);
 
     if (!frame->aux_stack_bound_reg) {
         frame->aux_stack_bound_reg = cc->aux_stack_bound_reg;
-        GEN_INSN(
-            LDI32, frame->aux_stack_bound_reg, cc->exec_env_reg,
-            NEW_CONST(I32, offsetof(WASMExecEnv, aux_stack_boundary.boundary)));
+        GEN_INSN(LDPTR, frame->aux_stack_bound_reg, cc->exec_env_reg,
+                 NEW_CONST(I32, offsetof(WASMExecEnv, aux_stack_boundary)));
+        /* TODO: Memory64 whether to convert depends on memory idx type */
+        GEN_INSN(I64TOI32, tmp, frame->aux_stack_bound_reg);
+        frame->aux_stack_bound_reg = tmp;
     }
     return frame->aux_stack_bound_reg;
 }
@@ -208,12 +211,15 @@ JitReg
 get_aux_stack_bottom_reg(JitFrame *frame)
 {
     JitCompContext *cc = frame->cc;
+    JitReg tmp = jit_cc_new_reg_I32(cc);
 
     if (!frame->aux_stack_bottom_reg) {
         frame->aux_stack_bottom_reg = cc->aux_stack_bottom_reg;
-        GEN_INSN(
-            LDI32, frame->aux_stack_bottom_reg, cc->exec_env_reg,
-            NEW_CONST(I32, offsetof(WASMExecEnv, aux_stack_bottom.bottom)));
+        GEN_INSN(LDPTR, frame->aux_stack_bottom_reg, cc->exec_env_reg,
+                 NEW_CONST(I32, offsetof(WASMExecEnv, aux_stack_bottom)));
+        /* TODO: Memory64 whether to convert depends on memory idx type */
+        GEN_INSN(I64TOI32, tmp, frame->aux_stack_bottom_reg);
+        frame->aux_stack_bottom_reg = tmp;
     }
     return frame->aux_stack_bottom_reg;
 }
@@ -228,7 +234,7 @@ is_shared_memory(WASMModule *module, uint32 mem_idx)
 
     if (mem_idx < module->import_memory_count) {
         memory_import = &(module->import_memories[mem_idx].u.memory);
-        is_shared = memory_import->flags & 0x02 ? true : false;
+        is_shared = memory_import->mem_type.flags & 0x02 ? true : false;
     }
     else {
         memory = &module->memories[mem_idx - module->import_memory_count];
@@ -915,8 +921,8 @@ create_fixed_virtual_regs(JitCompContext *cc)
     cc->import_func_ptrs_reg = jit_cc_new_reg_ptr(cc);
     cc->fast_jit_func_ptrs_reg = jit_cc_new_reg_ptr(cc);
     cc->func_type_indexes_reg = jit_cc_new_reg_ptr(cc);
-    cc->aux_stack_bound_reg = jit_cc_new_reg_I32(cc);
-    cc->aux_stack_bottom_reg = jit_cc_new_reg_I32(cc);
+    cc->aux_stack_bound_reg = jit_cc_new_reg_ptr(cc);
+    cc->aux_stack_bottom_reg = jit_cc_new_reg_ptr(cc);
 
     count = module->import_memory_count + module->memory_count;
     if (count > 0) {
@@ -1093,7 +1099,7 @@ init_func_translation(JitCompContext *cc)
         || !(jit_frame = jit_calloc(offsetof(JitFrame, lp)
                                     + sizeof(*jit_frame->lp)
                                           * (max_locals + max_stacks)))) {
-        os_printf("allocate jit frame failed\n");
+        LOG_ERROR("allocate jit frame failed\n");
         return NULL;
     }
 
@@ -1157,22 +1163,22 @@ init_func_translation(JitCompContext *cc)
     func_inst = jit_cc_new_reg_ptr(cc);
 #if WASM_ENABLE_PERF_PROFILING != 0
     time_started = jit_cc_new_reg_I64(cc);
-    /* Call os_time_get_boot_microsecond() to get time_started firstly
+    /* Call os_time_thread_cputime_us() to get time_started firstly
        as there is stack frame switching below, calling native in them
        may cause register spilling work inproperly */
-    if (!jit_emit_callnative(cc, os_time_get_boot_microsecond, time_started,
-                             NULL, 0)) {
+    if (!jit_emit_callnative(cc, os_time_thread_cputime_us, time_started, NULL,
+                             0)) {
         return NULL;
     }
 #endif
 #endif
 
-    /* top = exec_env->wasm_stack.s.top */
+    /* top = exec_env->wasm_stack.top */
     GEN_INSN(LDPTR, top, cc->exec_env_reg,
-             NEW_CONST(I32, offsetof(WASMExecEnv, wasm_stack.s.top)));
-    /* top_boundary = exec_env->wasm_stack.s.top_boundary */
+             NEW_CONST(I32, offsetof(WASMExecEnv, wasm_stack.top)));
+    /* top_boundary = exec_env->wasm_stack.top_boundary */
     GEN_INSN(LDPTR, top_boundary, cc->exec_env_reg,
-             NEW_CONST(I32, offsetof(WASMExecEnv, wasm_stack.s.top_boundary)));
+             NEW_CONST(I32, offsetof(WASMExecEnv, wasm_stack.top_boundary)));
     /* frame_boundary = top + frame_size + outs_size */
     GEN_INSN(ADD, frame_boundary, top, NEW_CONST(PTR, frame_size + outs_size));
     /* if frame_boundary > top_boundary, throw stack overflow exception */
@@ -1185,9 +1191,9 @@ init_func_translation(JitCompContext *cc)
     /* Add first and then sub to reduce one used register */
     /* new_top = frame_boundary - outs_size = top + frame_size */
     GEN_INSN(SUB, new_top, frame_boundary, NEW_CONST(PTR, outs_size));
-    /* exec_env->wasm_stack.s.top = new_top */
+    /* exec_env->wasm_stack.top = new_top */
     GEN_INSN(STPTR, new_top, cc->exec_env_reg,
-             NEW_CONST(I32, offsetof(WASMExecEnv, wasm_stack.s.top)));
+             NEW_CONST(I32, offsetof(WASMExecEnv, wasm_stack.top)));
     /* frame_sp = frame->lp + local_size */
     GEN_INSN(ADD, frame_sp, top,
              NEW_CONST(PTR, offsetof(WASMInterpFrame, lp) + local_size));
@@ -1236,6 +1242,21 @@ init_func_translation(JitCompContext *cc)
         GEN_INSN(STI32, NEW_CONST(I32, 0), cc->fp_reg,
                  NEW_CONST(I32, local_off));
     }
+
+#if WASM_ENABLE_REF_TYPES != 0 && WASM_ENABLE_GC == 0
+    /* externref/funcref should be NULL_REF rather than 0 */
+    local_off = (uint32)offsetof(WASMInterpFrame, lp)
+                + cur_wasm_func->param_cell_num * 4;
+    for (i = 0; i < cur_wasm_func->local_count; i++) {
+        if (cur_wasm_func->local_types[i] == VALUE_TYPE_EXTERNREF
+            || cur_wasm_func->local_types[i] == VALUE_TYPE_FUNCREF) {
+            GEN_INSN(STI32, NEW_CONST(I32, NULL_REF), cc->fp_reg,
+                     NEW_CONST(I32, local_off));
+        }
+        local_off +=
+            4 * wasm_value_type_cell_num(cur_wasm_func->local_types[i]);
+    }
+#endif
 
     return jit_frame;
 }
@@ -1489,7 +1510,9 @@ jit_compile_func(JitCompContext *cc)
             case EXT_OP_LOOP:
             case EXT_OP_IF:
             {
-                read_leb_uint32(frame_ip, frame_ip_end, type_idx);
+                read_leb_int32(frame_ip, frame_ip_end, type_idx);
+                /* type index was checked in wasm loader */
+                bh_assert(type_idx < cc->cur_wasm_module->type_count);
                 func_type = cc->cur_wasm_module->types[type_idx];
                 param_count = func_type->param_count;
                 param_types = func_type->types;
@@ -2258,7 +2281,9 @@ jit_compile_func(JitCompContext *cc)
                 uint32 opcode1;
 
                 read_leb_uint32(frame_ip, frame_ip_end, opcode1);
-                opcode = (uint32)opcode1;
+                /* opcode1 was checked in loader and is no larger than
+                   UINT8_MAX */
+                opcode = (uint8)opcode1;
 
                 switch (opcode) {
                     case WASM_OP_I32_TRUNC_SAT_S_F32:
@@ -2397,10 +2422,13 @@ jit_compile_func(JitCompContext *cc)
             case WASM_OP_ATOMIC_PREFIX:
             {
                 uint8 bin_op, op_type;
+                uint32 opcode1;
 
-                if (frame_ip < frame_ip_end) {
-                    opcode = *frame_ip++;
-                }
+                read_leb_uint32(frame_ip, frame_ip_end, opcode1);
+                /* opcode1 was checked in loader and is no larger than
+                   UINT8_MAX */
+                opcode = (uint8)opcode1;
+
                 if (opcode != WASM_OP_ATOMIC_FENCE) {
                     read_leb_uint32(frame_ip, frame_ip_end, align);
                     read_leb_uint32(frame_ip, frame_ip_end, offset);

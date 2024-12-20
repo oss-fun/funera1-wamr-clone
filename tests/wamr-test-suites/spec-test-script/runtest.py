@@ -301,6 +301,9 @@ parser.add_argument('--simd', default=False, action='store_true',
 parser.add_argument('--xip', default=False, action='store_true',
         help="Enable XIP")
 
+parser.add_argument('--eh', default=False, action='store_true',
+        help="Enable Exception Handling")
+
 parser.add_argument('--multi-module', default=False, action='store_true',
         help="Enable Multi-thread")
 
@@ -309,6 +312,9 @@ parser.add_argument('--multi-thread', default=False, action='store_true',
 
 parser.add_argument('--gc', default=False, action='store_true',
         help='Test with GC')
+
+parser.add_argument('--memory64', default=False, action='store_true',
+        help='Test with Memory64')
 
 parser.add_argument('--qemu', default=False, action='store_true',
         help="Enable QEMU")
@@ -623,7 +629,7 @@ def vector_value_comparison(out, expected):
         int(expected_val[1]) if not "0x" in expected_val[1] else int(expected_val[1], 16))
 
     if lane_type in ["i8x16", "i16x8", "i32x4", "i64x2"]:
-        return out_packed == expected_packed;
+        return out_packed == expected_packed
     else:
         assert(lane_type in ["f32x4", "f64x2"]), "unexpected lane_type"
 
@@ -762,6 +768,13 @@ def test_assert(r, opts, mode, cmd, expected):
         if o.find(e) >= 0 or e.find(o) >= 0:
             return True
 
+    # wasm-exception thrown out of function call, not a trap
+    if mode=='wasmexception':
+        o = re.sub('^Exception: ', '', out)
+        e = re.sub('^Exception: ', '', expected)
+        if o.find(e) >= 0 or e.find(o) >= 0:
+            return True
+
     ## 0x9:i32,-0x1:i32 -> ['0x9:i32', '-0x1:i32']
     expected_list = re.split(',', expected)
     out_list = re.split(',', out)
@@ -807,7 +820,7 @@ def test_assert_return(r, opts, form):
             n = re.search('^\(assert_return\s+\(invoke\s+\$((?:[^\s])*)\s+"([^"]*)"*()()\)\s*\)\s*$', form, re.S)
     if not m and not n:
         if re.search('^\(assert_return\s+\(get.*\).*\)$', form, re.S):
-            log("ignoring assert_return get");
+            log("ignoring assert_return get")
             return
         else:
             raise Exception("unparsed assert_return: '%s'" % form)
@@ -888,6 +901,7 @@ def test_assert_return(r, opts, form):
             except:
                 _, exc, _ = sys.exc_info()
                 log("Run wamrc failed:\n  got: '%s'" % r.buf)
+                ret_code = 1
                 sys.exit(1)
         r = run_wasm_with_repl(module+".wasm", module+".aot" if test_aot else module, opts, r)
         # Wait for the initial prompt
@@ -953,6 +967,7 @@ def test_assert_trap(r, opts, form):
             except:
                 _, exc, _ = sys.exc_info()
                 log("Run wamrc failed:\n  got: '%s'" % r.buf)
+                ret_code = 1
                 sys.exit(1)
         r = run_wasm_with_repl(module+".wasm", module+".aot" if test_aot else module, opts, r)
         # Wait for the initial prompt
@@ -986,6 +1001,42 @@ def test_assert_exhaustion(r,opts,form):
         args = [re.split(' +', v)[1] for v in re.split("\)\s*\(", m.group(2)[1:-1])]
     expected = "Exception: %s\n" % m.group(3)
     test_assert(r, opts, "exhaustion", "%s %s" % (func, " ".join(args)), expected)
+
+
+# added to support WASM_ENABLE_EXCE_HANDLING
+def test_assert_wasmexception(r,opts,form):
+    # params
+
+    # ^
+    #     \(assert_exception\s+
+    #         \(invoke\s+"([^"]+)"\s+
+    #            (\(.*\))\s*
+    #            ()
+    #         \)\s*
+    #     \)\s*
+    # $
+    m = re.search('^\(assert_exception\s+\(invoke\s+"([^"]+)"\s+(\(.*\))\s*\)\s*\)\s*$', form)
+    if not m:
+        # no params
+
+        # ^
+        #       \(assert_exception\s+
+        #           \(invoke\s+"([^"]+)"\s*
+        #               ()
+        #           \)\s*
+        #       \)\s*
+        # $
+        m = re.search('^\(assert_exception\s+\(invoke\s+"([^"]+)"\s*()\)\s*\)\s*$', form)
+    if not m:
+        raise Exception("unparsed assert_exception: '%s'" % form)
+    func = m.group(1) # function name
+    if m.group(2) == '': # arguments
+        args = []
+    else:
+        args = [re.split(' +', v)[1] for v in re.split("\)\s*\(", m.group(2)[1:-1])]
+
+    expected = "Exception: uncaught wasm exception\n"
+    test_assert(r, opts, "wasmexception", "%s %s" % (func, " ".join(args)), expected)
 
 def do_invoke(r, opts, form):
     # params
@@ -1025,8 +1076,12 @@ def compile_wast_to_wasm(form, wast_tempfile, wasm_tempfile, opts):
     # default arguments
     if opts.gc:
         cmd = [opts.wast2wasm, "-u", "-d", wast_tempfile, "-o", wasm_tempfile]
+    elif opts.eh:
+        cmd = [opts.wast2wasm, "--enable-threads", "--no-check", "--enable-exceptions", "--enable-tail-call", wast_tempfile, "-o", wasm_tempfile ]
+    elif opts.memory64:
+        cmd = [opts.wast2wasm, "--enable-memory64", "--no-check", wast_tempfile, "-o", wasm_tempfile ]
     else:
-        cmd = [opts.wast2wasm, "--enable-thread", "--no-check",
+        cmd = [opts.wast2wasm, "--enable-threads", "--no-check",
                wast_tempfile, "-o", wasm_tempfile ]
 
     # remove reference-type and bulk-memory enabling options since a WABT
@@ -1043,7 +1098,7 @@ def compile_wast_to_wasm(form, wast_tempfile, wasm_tempfile, opts):
     return True
 
 def compile_wasm_to_aot(wasm_tempfile, aot_tempfile, runner, opts, r, output = 'default'):
-    log("Compiling AOT to '%s'" % aot_tempfile)
+    log("Compiling '%s' to '%s'" % (wasm_tempfile, aot_tempfile))
     cmd = [opts.aot_compiler]
 
     if test_target in aot_target_options_map:
@@ -1062,6 +1117,10 @@ def compile_wasm_to_aot(wasm_tempfile, aot_tempfile, runner, opts, r, output = '
     if opts.multi_thread:
         cmd.append("--enable-multi-thread")
 
+    if opts.gc:
+        cmd.append("--enable-gc")
+        cmd.append("--enable-tail-call")
+
     if output == 'object':
         cmd.append("--format=object")
     elif output == 'ir':
@@ -1074,9 +1133,10 @@ def compile_wasm_to_aot(wasm_tempfile, aot_tempfile, runner, opts, r, output = '
 
     # Bounds checks is disabled by default for 64-bit targets, to
     # use the hardware based bounds checks. But it is not supported
-    # in QEMU with NuttX.
-    # Enable bounds checks explicitly for all targets if running in QEMU.
-    if opts.qemu:
+    # in QEMU with NuttX and in memory64 mode.
+    # Enable bounds checks explicitly for all targets if running in QEMU or all targets
+    # running in memory64 mode.
+    if opts.qemu or opts.memory64:
         cmd.append("--bounds-checks=1")
 
     # RISCV64 requires -mcmodel=medany, which can be set by --size-level=1
@@ -1175,6 +1235,7 @@ def test_assert_with_exception(form, wast_tempfile, wasm_tempfile, aot_tempfile,
             else:
                 log("Run wamrc failed:\n  expected: '%s'\n  got: '%s'" % \
                     (expected, r.buf))
+                ret_code = 1
                 sys.exit(1)
 
     r = run_wasm_with_repl(wasm_tempfile, aot_tempfile if test_aot else None, opts, r)
@@ -1236,6 +1297,8 @@ if __name__ == "__main__":
                 test_assert_with_exception(form, wast_tempfile, wasm_tempfile, aot_tempfile if test_aot else None, opts, r)
             elif re.match("^\(assert_exhaustion\\b.*", form):
                 test_assert_exhaustion(r, opts, form)
+            elif re.match("^\(assert_exception\\b.*", form):
+                test_assert_wasmexception(r, opts, form)
             elif re.match("^\(assert_unlinkable\\b.*", form):
                 test_assert_with_exception(form, wast_tempfile, wasm_tempfile, aot_tempfile if test_aot else None, opts, r, False)
             elif re.match("^\(assert_malformed\\b.*", form):
@@ -1269,25 +1332,46 @@ if __name__ == "__main__":
                                 log("Out exception includes expected one, pass:")
                                 log("  Expected: %s" % error_msg)
                                 log("  Got: %s" % r.buf)
+                                continue
+                            # one case in binary.wast
+                            elif (error_msg == "unexpected end of section or function"
+                                  and r.buf.find("unexpected end")):
+                                continue
+                            # one case in binary.wast
+                            elif (error_msg == "invalid value type"
+                                  and r.buf.find("unexpected end")):
+                                continue
+                            # one case in binary.wast
+                            elif (error_msg == "integer too large"
+                                  and r.buf.find("tables cannot be shared")):
+                                continue
+                            # one case in binary.wast
+                            elif (error_msg == "zero byte expected"
+                                  and r.buf.find("unknown table")):
+                                continue
+                            # one case in binary.wast
+                            elif (error_msg == "invalid section id"
+                                  and r.buf.find("unexpected end of section or function")):
+                                continue
+                            # one case in binary.wast
+                            elif (error_msg == "illegal opcode"
+                                  and r.buf.find("unexpected end of section or function")):
+                                continue
+                            # one case in custom.wast
+                            elif (error_msg == "length out of bounds"
+                                  and r.buf.find("unexpected end")):
+                                continue
+                            # several cases in binary-leb128.wast
+                            elif (error_msg == "integer representation too long"
+                                  and r.buf.find("invalid section id")):
+                                continue
                             else:
                                 log("Run wamrc failed:\n  expected: '%s'\n  got: '%s'" % \
                                     (error_msg, r.buf))
-                            continue
+                                ret_code = 1
+                                sys.exit(1)
 
                     r = run_wasm_with_repl(wasm_tempfile, aot_tempfile if test_aot else None, opts, r)
-
-                    if (error_msg == "unexpected end of section or function"):
-                        # one case in binary.wast
-                        assert_prompt(r, ["unexpected end", error_msg], opts.start_timeout, True)
-                    elif (error_msg == "invalid value type"):
-                        # one case in binary.wast
-                        assert_prompt(r, ["unexpected end", error_msg], opts.start_timeout, True)
-                    elif (error_msg == "length out of bounds"):
-                        # one case in custom.wast
-                        assert_prompt(r, ["unexpected end", error_msg], opts.start_timeout, True)
-                    elif (error_msg == "integer representation too long"):
-                        # several cases in binary-leb128.wast
-                        assert_prompt(r, ["invalid section id", error_msg], opts.start_timeout, True)
 
                 elif re.match("^\(assert_malformed\s*\(module quote", form):
                     log("ignoring assert_malformed module quote")
@@ -1321,6 +1405,7 @@ if __name__ == "__main__":
                             except:
                                 _, exc, _ = sys.exc_info()
                                 log("Run wamrc failed:\n  got: '%s'" % r.buf)
+                                ret_code = 1
                                 sys.exit(1)
                         temp_module_table[module_name] = temp_files[1]
                         r = run_wasm_with_repl(temp_files[1], temp_files[2] if test_aot else None, opts, r)
@@ -1335,6 +1420,7 @@ if __name__ == "__main__":
                         except:
                             _, exc, _ = sys.exc_info()
                             log("Run wamrc failed:\n  got: '%s'" % r.buf)
+                            ret_code = 1
                             sys.exit(1)
 
                     r = run_wasm_with_repl(wasm_tempfile, aot_tempfile if test_aot else None, opts, r)
@@ -1418,4 +1504,3 @@ if __name__ == "__main__":
             log("Leaving tempfiles: %s" % ([wast_tempfile, wasm_tempfile]))
 
         sys.exit(ret_code)
-        

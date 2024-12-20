@@ -7,6 +7,7 @@
 
 #if defined(__APPLE__) || defined(__MACH__)
 #include <libkern/OSCacheControl.h>
+#include <TargetConditionals.h>
 #endif
 
 #ifndef BH_ENABLE_TRACE_MMAP
@@ -64,9 +65,11 @@ os_mmap(void *hint, size_t size, int prot, int flags, os_file_handle file)
         /* integer overflow */
         return NULL;
 
+#if WASM_ENABLE_MEMORY64 == 0
     if (request_size > 16 * (uint64)UINT32_MAX)
-        /* at most 16 G is allowed */
+        /* at most 64 G is allowed */
         return NULL;
+#endif
 
     if (prot & MMAP_PROT_READ)
         map_prot |= PROT_READ;
@@ -78,18 +81,14 @@ os_mmap(void *hint, size_t size, int prot, int flags, os_file_handle file)
         map_prot |= PROT_EXEC;
 
 #if defined(BUILD_TARGET_X86_64) || defined(BUILD_TARGET_AMD_64)
+#ifndef __APPLE__
     if (flags & MMAP_MAP_32BIT)
         map_flags |= MAP_32BIT;
+#endif
 #endif
 
     if (flags & MMAP_MAP_FIXED)
         map_flags |= MAP_FIXED;
-
-#if defined(BUILD_TARGET_X86_64) || defined(BUILD_TARGET_AMD_64)
-#if defined(__APPLE__)
-retry_without_map_32bit:
-#endif
-#endif
 
 #if defined(BUILD_TARGET_RISCV64_LP64D) || defined(BUILD_TARGET_RISCV64_LP64)
     /* As AOT relocation in RISCV64 may require that the code/data mapped
@@ -137,7 +136,7 @@ retry_without_map_32bit:
     }
 #endif /* end of BUILD_TARGET_RISCV64_LP64D || BUILD_TARGET_RISCV64_LP64 */
 
-    /* memory has't been mapped or was mapped failed previously */
+    /* memory hasn't been mapped or was mapped failed previously */
     if (addr == MAP_FAILED) {
         /* try 5 times */
         for (i = 0; i < 5; i++) {
@@ -148,14 +147,6 @@ retry_without_map_32bit:
     }
 
     if (addr == MAP_FAILED) {
-#if defined(BUILD_TARGET_X86_64) || defined(BUILD_TARGET_AMD_64)
-#if defined(__APPLE__)
-        if ((map_flags & MAP_32BIT) != 0) {
-            map_flags &= ~MAP_32BIT;
-            goto retry_without_map_32bit;
-        }
-#endif
-#endif
 #if BH_ENABLE_TRACE_MMAP != 0
         os_printf("mmap failed\n");
 #endif
@@ -247,6 +238,23 @@ os_munmap(void *addr, size_t size)
     }
 }
 
+#if WASM_HAVE_MREMAP != 0
+void *
+os_mremap(void *old_addr, size_t old_size, size_t new_size)
+{
+    void *ptr = mremap(old_addr, old_size, new_size, MREMAP_MAYMOVE);
+
+    if (ptr == MAP_FAILED) {
+#if BH_ENABLE_TRACE_MMAP != 0
+        os_printf("mremap failed: %d\n", errno);
+#endif
+        return os_mremap_slow(old_addr, old_size, new_size);
+    }
+
+    return ptr;
+}
+#endif
+
 int
 os_mprotect(void *addr, size_t size, int prot)
 {
@@ -278,5 +286,8 @@ os_icache_flush(void *start, size_t len)
 {
 #if defined(__APPLE__) || defined(__MACH__)
     sys_icache_invalidate(start, len);
+#else
+    (void)start;
+    (void)len;
 #endif
 }

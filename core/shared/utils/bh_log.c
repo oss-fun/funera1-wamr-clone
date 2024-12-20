@@ -7,7 +7,7 @@
 
 /**
  * The verbose level of the log system.  Only those verbose logs whose
- * levels are less than or equal to this value are outputed.
+ * levels are less than or equal to this value are output.
  */
 static uint32 log_verbose_level = BH_LOG_LEVEL_WARNING;
 
@@ -17,6 +17,7 @@ bh_log_set_verbose_level(uint32 level)
     log_verbose_level = level;
 }
 
+#ifndef BH_LOG
 void
 bh_log(LogLevel log_level, const char *file, int line, const char *fmt, ...)
 {
@@ -31,13 +32,13 @@ bh_log(LogLevel log_level, const char *file, int line, const char *fmt, ...)
 
     self = os_self_thread();
 
-    usec = os_time_get_boot_microsecond();
+    usec = os_time_get_boot_us();
     t = (uint32)(usec / 1000000) % (24 * 60 * 60);
     h = t / (60 * 60);
     t = t % (60 * 60);
     m = t / 60;
     s = t % 60;
-    mills = (uint32)(usec % 1000);
+    mills = (uint32)((usec % 1000000) / 1000);
 
     snprintf(buf, sizeof(buf),
              "%02" PRIu32 ":%02" PRIu32 ":%02" PRIu32 ":%03" PRIu32, h, m, s,
@@ -56,6 +57,7 @@ bh_log(LogLevel log_level, const char *file, int line, const char *fmt, ...)
 
     os_printf("\n");
 }
+#endif
 
 static uint32 last_time_ms = 0;
 static uint32 total_time_ms = 0;

@@ -8,12 +8,12 @@ on:
     types:
       - opened
       - synchronize
-    # running nightly pipeline if you're changing it 
+    # running nightly pipeline if you're changing it
     # stress tests are run only in nightly at the moment, so running them in they are changed
     paths:
       - ".github/workflows/nightly_run.yml"
       - "core/iwasm/libraries/lib-wasi-threads/stress-test/**"
-      
+
   # midnight UTC
   schedule:
     - cron: "0 0 * * *"
@@ -36,10 +36,11 @@ env:
   LLVM_EAGER_JIT_BUILD_OPTIONS: "-DWAMR_BUILD_AOT=1 -DWAMR_BUILD_FAST_INTERP=0 -DWAMR_BUILD_INTERP=0 -DWAMR_BUILD_FAST_JIT=0 -DWAMR_BUILD_JIT=1 -DWAMR_BUILD_LAZY_JIT=0"
   MULTI_TIER_JIT_BUILD_OPTIONS: "-DWAMR_BUILD_AOT=1 -DWAMR_BUILD_FAST_INTERP=0 -DWAMR_BUILD_INTERP=1 -DWAMR_BUILD_FAST_JIT=1 -DWAMR_BUILD_JIT=1 -DWAMR_BUILD_LAZY_JIT=1"
   # For Spec Test
-  DEFAULT_TEST_OPTIONS: "-s spec -b -P"
-  MULTI_MODULES_TEST_OPTIONS: "-s spec -b -M -P"
-  SIMD_TEST_OPTIONS: "-s spec -b -S -P"
-  THREADS_TEST_OPTIONS: "-s spec -b -p -P"
+  # FIXME: use binary release(adding -b) instead of building from source after upgrading to 22.04
+  DEFAULT_TEST_OPTIONS: "-s spec -P"
+  MULTI_MODULES_TEST_OPTIONS: "-s spec -M -P"
+  SIMD_TEST_OPTIONS: "-s spec -S -P"
+  THREADS_TEST_OPTIONS: "-s spec -p -P"
   X86_32_TARGET_TEST_OPTIONS: "-m x86_32 -P"
   WASI_TEST_OPTIONS: "-s wasi_certification -w"
 
@@ -54,7 +55,7 @@ jobs:
     with:
       os: "ubuntu-22.04"
       arch: "X86"
-  
+
   build_wamrc:
     needs:
       [
@@ -65,16 +66,16 @@ jobs:
       matrix:
         include:
           - os: ubuntu-20.04
-            llvm_cache_key: ${{ needs.build_llvm_libraries_on_ubuntu_2004.outputs.cache_key }}  
+            llvm_cache_key: ${{ needs.build_llvm_libraries_on_ubuntu_2004.outputs.cache_key }}
     steps:
       - name: checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       # since jobs.id can't contain the dot character
       # it is hard to use `format` to assemble the cache key
       - name: Get LLVM libraries
         id: retrieve_llvm_libs
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: |
             ./core/deps/llvm/build/bin
@@ -130,12 +131,13 @@ jobs:
             "-DWAMR_BUILD_SIMD=1",
             "-DWAMR_BUILD_TAIL_CALL=1",
             "-DWAMR_DISABLE_HW_BOUND_CHECK=1",
+            "-DWAMR_BUILD_MEMORY64=1",
           ]
         os: [ubuntu-20.04]
         platform: [android, linux]
         exclude:
-          # uncompatiable feature and platform
-          # uncompatiable mode and feature
+          # incompatible feature and platform
+          # incompatible mode and feature
           # MULTI_MODULE only on INTERP mode and AOT mode
           - make_options_run_mode: $FAST_JIT_BUILD_OPTIONS
             make_options_feature: "-DWAMR_BUILD_MULTI_MODULE=1"
@@ -188,10 +190,31 @@ jobs:
             make_options_feature: "-DWAMR_BUILD_MINI_LOADER=1"
           - make_options_run_mode: $MULTI_TIER_JIT_BUILD_OPTIONS
             make_options_feature: "-DWAMR_BUILD_MINI_LOADER=1"
-          # Fast-JIT and Multi-Tier-JIT mode don't support android(X86-32)
+          # Memory64 only on CLASSIC INTERP mode, and only on 64-bit platform
+          - make_options_feature: "-DWAMR_BUILD_MEMORY64=1"
+            platform: android
+          - make_options_run_mode: $AOT_BUILD_OPTIONS
+            make_options_feature: "-DWAMR_BUILD_MEMORY64=1"
+          - make_options_run_mode: $FAST_INTERP_BUILD_OPTIONS
+            make_options_feature: "-DWAMR_BUILD_MEMORY64=1"
+          - make_options_run_mode: $FAST_JIT_BUILD_OPTIONS
+            make_options_feature: "-DWAMR_BUILD_MEMORY64=1"
+          - make_options_run_mode: $LLVM_LAZY_JIT_BUILD_OPTIONS
+            make_options_feature: "-DWAMR_BUILD_MEMORY64=1"
+          - make_options_run_mode: $LLVM_EAGER_JIT_BUILD_OPTIONS
+            make_options_feature: "-DWAMR_BUILD_MEMORY64=1"
+          - make_options_run_mode: $MULTI_TIER_JIT_BUILD_OPTIONS
+            make_options_feature: "-DWAMR_BUILD_MEMORY64=1"
+          # Fast-JIT and Multi-Tier-JIT mode don't support android
           - make_options_run_mode: $FAST_JIT_BUILD_OPTIONS
             platform: android
           - make_options_run_mode: $MULTI_TIER_JIT_BUILD_OPTIONS
+            platform: android
+          # LLVM JIT pre-built binary wasn't compiled by Android NDK
+          # and isn't available for android
+          - make_options_run_mode: $LLVM_LAZY_JIT_BUILD_OPTIONS
+            platform: android
+          - make_options_run_mode: $LLVM_EAGER_JIT_BUILD_OPTIONS
             platform: android
         include:
           - os: ubuntu-20.04
@@ -199,13 +222,13 @@ jobs:
 
     steps:
       - name: checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       # only download llvm cache when needed
       - name: Get LLVM libraries
         id: retrieve_llvm_libs
         if: endsWith(matrix.make_options_run_mode, '_JIT_BUILD_OPTIONS')
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: |
             ./core/deps/llvm/build/bin
@@ -219,10 +242,20 @@ jobs:
         if: endsWith(matrix.make_options_run_mode, '_JIT_BUILD_OPTIONS') && (steps.retrieve_llvm_libs.outputs.cache-hit != 'true')
         run: echo "::error::can not get prebuilt llvm libraries" && exit 1
 
-      - name: Build iwasm
+      - name: Build iwasm for linux
+        if: matrix.platform == 'linux'
         run: |
           mkdir build && cd build
           cmake .. ${{ matrix.make_options_run_mode }} ${{ matrix.make_options_feature }}
+          cmake --build . --config Release --parallel 4
+        working-directory: product-mini/platforms/${{ matrix.platform }}
+
+      - name: Build iwasm for android
+        if: matrix.platform == 'android'
+        run: |
+          mkdir build && cd build
+          cmake .. ${{ matrix.make_options_run_mode }} ${{ matrix.make_options_feature }} \
+                -DWAMR_BUILD_TARGET=X86_64
           cmake --build . --config Release --parallel 4
         working-directory: product-mini/platforms/${{ matrix.platform }}
 
@@ -255,10 +288,11 @@ jobs:
             "-DWAMR_BUILD_SIMD=1",
             "-DWAMR_BUILD_TAIL_CALL=1",
             "-DWAMR_DISABLE_HW_BOUND_CHECK=1",
+            "-DWAMR_BUILD_MEMORY64=1",
           ]
         exclude:
-          # uncompatiable feature and platform
-          # uncompatiable mode and feature
+          # incompatible feature and platform
+          # incompatible mode and feature
           # MULTI_MODULE only on INTERP mode and AOT mode
           - make_options_run_mode: $FAST_JIT_BUILD_OPTIONS
             make_options_feature: "-DWAMR_BUILD_MULTI_MODULE=1"
@@ -283,6 +317,11 @@ jobs:
           # MINI_LOADER only on INTERP mode
           - make_options_run_mode: $FAST_JIT_BUILD_OPTIONS
             make_options_feature: "-DWAMR_BUILD_MINI_LOADER=1"
+          # Memory64 only on CLASSIC INTERP mode
+          - make_options_run_mode: $FAST_INTERP_BUILD_OPTIONS
+            make_options_feature: "-DWAMR_BUILD_MEMORY64=1"
+          - make_options_run_mode: $FAST_JIT_BUILD_OPTIONS
+            make_options_feature: "-DWAMR_BUILD_MEMORY64=1"
     steps:
       - name: checkout
         uses: actions/checkout@v3
@@ -347,12 +386,12 @@ jobs:
             sanitizer: asan
     steps:
       - name: checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Get LLVM libraries
         id: retrieve_llvm_libs
         if: (!endsWith(matrix.make_options, '_INTERP_BUILD_OPTIONS'))
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: |
             ./core/deps/llvm/build/bin
@@ -383,7 +422,9 @@ jobs:
       - name: Build Sample [wasm-c-api]
         run: |
           VERBOSE=1
-          cmake -S . -B build ${{ matrix.make_options }} -D WAMR_BUILD_SANITIZER="${{matrix.sanitizer}}"
+          cmake -S . -B build ${{ matrix.make_options }} \
+                -D WAMR_BUILD_SANITIZER="${{matrix.sanitizer}}" \
+                -D WAMR_BUILD_QUICK_AOT_ENTRY=0
           cmake --build build --config Release --parallel 4
           ctest --test-dir build --output-on-failure
         working-directory: samples/wasm-c-api
@@ -412,24 +453,24 @@ jobs:
             llvm_cache_key: ${{ needs.build_llvm_libraries_on_ubuntu_2004.outputs.cache_key }}
     steps:
       - name: checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: download and install wasi-sdk
         run: |
           cd /opt
           sudo wget ${{ matrix.wasi_sdk_release }}
           sudo tar -xzf wasi-sdk-*.tar.gz
-          sudo mv wasi-sdk-20.0 wasi-sdk
+          sudo ln -sf wasi-sdk-20.0 wasi-sdk
       - name: download and install wabt
         run: |
           cd /opt
           sudo wget ${{ matrix.wabt_release }}
           sudo tar -xzf wabt-1.0.31-*.tar.gz
-          sudo mv wabt-1.0.31 wabt
+          sudo ln -sf wabt-1.0.31 wabt
 
       - name: Get LLVM libraries
         id: retrieve_llvm_libs
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: |
             ./core/deps/llvm/build/bin
@@ -487,12 +528,6 @@ jobs:
           cmake ..
           cmake --build . --config Release --parallel 4
           ./hello
-      - name: Build Sample [simple]
-        run: |
-          ./build.sh -p host-interp
-          python3 ./sample_test_run.py $(pwd)/out
-          exit $?
-        working-directory: ./samples/simple
 
       - name: Build Sample [wasi-threads]
         run: |
@@ -507,6 +542,40 @@ jobs:
           cd samples/shared-module
           ./build.sh
           ./run.sh
+
+      - name: Build Sample [terminate]
+        run: |
+          cd samples/terminate
+          ./build.sh
+          ./run.sh
+
+      - name: Build Sample [native-stack-overflow]
+        run: |
+          cd samples/native-stack-overflow
+          ./build.sh
+          ./run.sh test1
+          ./run.sh test2
+
+      - name: Build Sample [native-lib]
+        run: |
+          mkdir build && cd build
+          cmake ..
+          cmake --build . --config Release --parallel 4
+          ./iwasm --native-lib=./libtest_add.so --native-lib=./libtest_sqrt.so --native-lib=./libtest_hello.so --native-lib=./libtest_hello2.so wasm-app/test.wasm
+        working-directory: ./samples/native-lib
+
+      - name: checkout wamr-app-framework
+        run: git clone https://github.com/bytecodealliance/wamr-app-framework.git
+      - name: download wamr-app-framework dependencies
+        run: LVGL=0 LV_DRIVERS=0 ./download.sh
+        working-directory: ./wamr-app-framework/deps
+      - name: Build Sample [simple]
+        run: |
+          ./build.sh -p host-interp
+          python3 ./sample_test_run.py $(pwd)/out
+          exit $?
+        working-directory: ./wamr-app-framework/samples/simple
+
   test:
     needs:
       [
@@ -551,7 +620,7 @@ jobs:
             ubuntu_version: "22.04"
 
         exclude:
-          # uncompatiable modes and features
+          # incompatible modes and features
           - os: ubuntu-20.04
             sanitizer: tsan
           # asan works only for aot now
@@ -593,7 +662,7 @@ jobs:
             test_option: $SIMD_TEST_OPTIONS
     steps:
       - name: checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: download and install wasi-sdk
         if: matrix.test_option == '$WASI_TEST_OPTIONS'
@@ -603,7 +672,7 @@ jobs:
           sudo tar -xzf wasi-sdk-*.tar.gz
           sudo mv wasi-sdk-20.0 wasi-sdk
 
-      # It is a temporary solution until new wasi-sdk that includes bug fixes is released 
+      # It is a temporary solution until new wasi-sdk that includes bug fixes is released
       - name: build wasi-libc from source
         if: matrix.test_option == '$WASI_TEST_OPTIONS'
         run: |
@@ -624,14 +693,16 @@ jobs:
         run: echo "TEST_ON_X86_32=true" >> $GITHUB_ENV
 
       - name: set additional tsan options
-        run: echo "TSAN_OPTIONS=suppressions=$PWD/tsan_suppressions.txt" >> $GITHUB_ENV
+        run: |
+          echo "TSAN_OPTIONS=suppressions=$PWD/tsan_suppressions.txt" >> $GITHUB_ENV
+          sudo sysctl vm.mmap_rnd_bits=28
         working-directory: tests/wamr-test-suites
 
       #only download llvm libraries in jit and aot mode
       - name: Get LLVM libraries
         if: env.USE_LLVM == 'true'
         id: retrieve_llvm_libs
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: |
             ./core/deps/llvm/build/bin
@@ -648,6 +719,9 @@ jobs:
       - name: install jq JSON processor
         if: matrix.running_mode == 'aot' && matrix.test_option == '$WASI_TEST_OPTIONS'
         run: sudo apt-get update && sudo apt install -y jq
+
+      - name: install for wabt compilation
+        run: sudo apt update && sudo apt install -y ninja-build
 
       - name: Build WASI thread tests
         if: matrix.test_option == '$WASI_TEST_OPTIONS'

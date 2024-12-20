@@ -20,7 +20,6 @@ on:
       - "!samples/workload/**"
       - "tests/wamr-test-suites/**"
       - "wamr-compiler/**"
-      - "wamr-sdk/**"
   # will be triggered on push events
   push:
     branches:
@@ -37,7 +36,6 @@ on:
       - "!samples/workload/**"
       - "tests/wamr-test-suites/**"
       - "wamr-compiler/**"
-      - "wamr-sdk/**"
   # allow to be triggered manually
   workflow_dispatch:
 
@@ -48,7 +46,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  AOT_BUILD_OPTIONS: "-DWAMR_BUILD_AOT=1 -DWAMR_BUILD_FAST_INTERP=0 -DWAMR_BUILD_INTERP=0 -DWAMR_BUILD_JIT=0 -DWAMR_BUILD_LAZY_JIT=0"
+  # ref types enabled in wamrc by default, so we need to enable it for iwasm in AOT mode
+  AOT_BUILD_OPTIONS: "-DWAMR_BUILD_AOT=1 -DWAMR_BUILD_FAST_INTERP=0 -DWAMR_BUILD_INTERP=0 -DWAMR_BUILD_JIT=0 -DWAMR_BUILD_LAZY_JIT=0 -DWAMR_BUILD_REF_TYPES=1"
   CLASSIC_INTERP_BUILD_OPTIONS: "-DWAMR_BUILD_AOT=0 -DWAMR_BUILD_FAST_INTERP=0 -DWAMR_BUILD_INTERP=1 -DWAMR_BUILD_JIT=0 -DWAMR_BUILD_LAZY_JIT=0"
   FAST_INTERP_BUILD_OPTIONS: "-DWAMR_BUILD_AOT=0 -DWAMR_BUILD_FAST_INTERP=1 -DWAMR_BUILD_INTERP=1 -DWAMR_BUILD_JIT=0 -DWAMR_BUILD_LAZY_JIT=0"
   FAST_JIT_BUILD_OPTIONS: "-DWAMR_BUILD_AOT=1 -DWAMR_BUILD_FAST_INTERP=0 -DWAMR_BUILD_INTERP=1 -DWAMR_BUILD_FAST_JIT=1 -DWAMR_BUILD_JIT=0 -DWAMR_BUILD_LAZY_JIT=1"
@@ -100,7 +99,7 @@ jobs:
         os: [ubuntu-20.04]
         platform: [linux-sgx]
         exclude:
-          # uncompatiable mode and feature
+          # incompatible mode and feature
           # MINI_LOADER only on INTERP mode
           - make_options_run_mode: $AOT_BUILD_OPTIONS
             make_options_feature: "-DWAMR_BUILD_MINI_LOADER=1"
@@ -119,7 +118,7 @@ jobs:
           source /opt/intel/sgxsdk/environment
 
       - name: checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Build iwasm
         run: |
@@ -165,7 +164,7 @@ jobs:
 
     steps:
       - name: checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: download and install wasi-sdk
         run: |
@@ -221,7 +220,7 @@ jobs:
       - name: Get LLVM libraries
         if: matrix.iwasm_make_options_run_mode == '$AOT_BUILD_OPTIONS'
         id: retrieve_llvm_libs
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: |
             ./core/deps/llvm/build/bin
@@ -246,7 +245,7 @@ jobs:
           cd samples/file
           mkdir build && cd build
           cmake ..
-          cmake --build . --config Release --parallel 4
+          cmake --build . --config Debug --parallel 4
           cp wasm-app/file.wasm `pwd`/../../../product-mini/platforms/${{ matrix.platform }}/enclave-sample
 
       - name: Test Sample [file] in non-aot mode
@@ -270,32 +269,33 @@ jobs:
     strategy:
       matrix:
         running_mode: ["classic-interp", "fast-interp", "aot", "fast-jit"]
-        test_option: ["-x -p -s spec -b -P", "-x -p -s spec -S -b -P", "-x -p -s spec -X -b -P"]
+        # FIXME: use binary release(adding -b) instead of building from source after upgrading to 22.04
+        test_option: ["-x -p -s spec -P", "-x -p -s spec -S -P", "-x -p -s spec -X -P"]
         llvm_cache_key: ["${{ needs.build_llvm_libraries.outputs.cache_key }}"]
         exclude:
           # classic-interp, fast-interp and fast-jit don't support simd
           - running_mode: "classic-interp"
-            test_option: "-x -p -s spec -S -b -P"
+            test_option: "-x -p -s spec -S -P"
           - running_mode: "fast-interp"
-            test_option: "-x -p -s spec -S -b -P"
+            test_option: "-x -p -s spec -S -P"
           - running_mode: "fast-jit"
-            test_option: "-x -p -s spec -S -b -P"
+            test_option: "-x -p -s spec -S -P"
           # classic-interp, fast-interp and fast jit don't support XIP
           - running_mode: "classic-interp"
-            test_option: "-x -p -s spec -X -b -P"
+            test_option: "-x -p -s spec -X -P"
           - running_mode: "fast-interp"
-            test_option: "-x -p -s spec -X -b -P"
+            test_option: "-x -p -s spec -X -P"
           - running_mode: "fast-jit"
-            test_option: "-x -p -s spec -X -b -P"
+            test_option: "-x -p -s spec -X -P"
 
     steps:
       - name: checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Get LLVM libraries
         if: matrix.running_mode == 'aot'
         id: retrieve_llvm_libs
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: |
             ./core/deps/llvm/build/bin
@@ -320,6 +320,9 @@ jobs:
           wget -qO - https://download.01.org/intel-sgx/sgx_repo/ubuntu/intel-sgx-deb.key | sudo apt-key add -
           sudo apt update
           sudo apt install -y libsgx-launch libsgx-urts
+
+      - name: install for wabt compilation
+        run: sudo apt update && sudo apt install -y ninja-build
 
       - name: run spec tests
         run: |

@@ -9,6 +9,10 @@
 #include "aot_runtime.h"
 #include "aot_intrinsic.h"
 
+#if WASM_ENABLE_STRINGREF != 0
+#include "string_object.h"
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -49,14 +53,16 @@ typedef struct {
 #define REG_REF_TYPES_SYM()
 #endif
 
-#if (WASM_ENABLE_PERF_PROFILING != 0) || (WASM_ENABLE_DUMP_CALL_STACK != 0)
+#if WASM_ENABLE_AOT_STACK_FRAME != 0
 #define REG_AOT_TRACE_SYM()               \
     REG_SYM(aot_alloc_frame),             \
-    REG_SYM(aot_free_frame),
+    REG_SYM(aot_free_frame),              \
+    REG_SYM(aot_frame_update_profile_info),
 #else
 #define REG_AOT_TRACE_SYM()
 #endif
 
+#if WASM_ENABLE_AOT_INTRINSICS != 0
 #define REG_INTRINSIC_SYM()               \
     REG_SYM(aot_intrinsic_fabs_f32),      \
     REG_SYM(aot_intrinsic_fabs_f64),      \
@@ -119,7 +125,10 @@ typedef struct {
     REG_SYM(aot_intrinsic_i32_div_s),     \
     REG_SYM(aot_intrinsic_i32_div_u),     \
     REG_SYM(aot_intrinsic_i32_rem_s),     \
-    REG_SYM(aot_intrinsic_i32_rem_u),     \
+    REG_SYM(aot_intrinsic_i32_rem_u),
+#else
+#define REG_INTRINSIC_SYM()
+#endif
 
 #if WASM_ENABLE_STATIC_PGO != 0
 #define REG_LLVM_PGO_SYM()               \
@@ -127,6 +136,49 @@ typedef struct {
     { "__llvm_profile_instrument_memop", llvm_profile_instrument_memop },
 #else
 #define REG_LLVM_PGO_SYM()
+#endif
+
+#if WASM_ENABLE_GC != 0
+#define REG_GC_SYM()                       \
+    REG_SYM(aot_array_init_with_data),     \
+    REG_SYM(aot_create_func_obj),          \
+    REG_SYM(aot_obj_is_instance_of),       \
+    REG_SYM(aot_func_type_is_super_of),    \
+    REG_SYM(aot_rtt_type_new),             \
+    REG_SYM(wasm_array_obj_copy),          \
+    REG_SYM(wasm_array_obj_new),           \
+    REG_SYM(wasm_externref_obj_to_internal_obj), \
+    REG_SYM(wasm_internal_obj_to_externref_obj), \
+    REG_SYM(wasm_obj_is_type_of),          \
+    REG_SYM(wasm_struct_obj_new),
+#else
+#define REG_GC_SYM()
+#endif
+
+#if WASM_ENABLE_STRINGREF != 0
+#define REG_STRINGREF_SYM()                 \
+    REG_SYM(wasm_stringref_obj_new),        \
+    REG_SYM(wasm_stringview_wtf8_obj_new),  \
+    REG_SYM(wasm_stringview_wtf16_obj_new), \
+    REG_SYM(wasm_stringview_iter_obj_new),  \
+    REG_SYM(wasm_string_destroy),           \
+    REG_SYM(wasm_string_new_const),         \
+    REG_SYM(wasm_string_new_with_encoding), \
+    REG_SYM(wasm_string_measure),           \
+    REG_SYM(wasm_string_wtf16_get_length),  \
+    REG_SYM(wasm_string_encode),            \
+    REG_SYM(wasm_string_concat),            \
+    REG_SYM(wasm_string_eq),                \
+    REG_SYM(wasm_string_is_usv_sequence),   \
+    REG_SYM(wasm_string_create_view),       \
+    REG_SYM(wasm_string_advance),           \
+    REG_SYM(wasm_string_slice),             \
+    REG_SYM(wasm_string_get_wtf16_codeunit),\
+    REG_SYM(wasm_string_next_codepoint),    \
+    REG_SYM(wasm_string_rewind),            \
+    REG_SYM(wasm_string_dump),
+#else
+#define REG_STRINGREF_SYM()
 #endif
 
 #define REG_COMMON_SYMBOLS                \
@@ -160,6 +212,8 @@ typedef struct {
     REG_AOT_TRACE_SYM()                   \
     REG_INTRINSIC_SYM()                   \
     REG_LLVM_PGO_SYM()                    \
+    REG_GC_SYM()                          \
+    REG_STRINGREF_SYM()                   \
 
 #define CHECK_RELOC_OFFSET(data_size) do {              \
     if (!check_reloc_offset(target_section_size,        \

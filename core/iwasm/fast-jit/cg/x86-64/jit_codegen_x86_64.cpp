@@ -7511,7 +7511,7 @@ at_rmw_xor_r_base_r_offset_r(x86::Assembler &a, uint32 bytes_dst,
             CHECK_KIND(r3, JIT_REG_KIND_I64);                                  \
         }                                                                      \
         /* r0: read/return value r2: memory base addr can't be const */        \
-        /* already check it's not const in LOAD_4ARGS(); */                    \
+        /* already check it's not const in LOAD_4ARGS() */                     \
         reg_no_dst = jit_reg_no(r0);                                           \
         CHECK_REG_NO(reg_no_dst, jit_reg_kind(r0));                            \
         /* mem_data base address has to be non-const */                        \
@@ -8461,7 +8461,7 @@ jit_codegen_compile_call_to_llvm_jit(const WASMType *func_type)
     /* r10 = outs_area->lp */
     {
         x86::Mem m(regs_i64[hreg_info->exec_env_hreg_index],
-                   (uint32)offsetof(WASMExecEnv, wasm_stack.s.top));
+                   (uint32)offsetof(WASMExecEnv, wasm_stack.top));
         a.mov(reg_lp, m);
         a.add(reg_lp, (uint32)offsetof(WASMInterpFrame, lp));
     }
@@ -8701,15 +8701,15 @@ fast_jit_alloc_frame(WASMExecEnv *exec_env, uint32 param_cell_num,
      * frame to store the function results from jit function to call,
      * the second is the frame for the jit function
      */
-    if ((uint8 *)exec_env->wasm_stack.s.top + size_frame1 + size_frame2
-        > exec_env->wasm_stack.s.top_boundary) {
+    if ((uint8 *)exec_env->wasm_stack.top + size_frame1 + size_frame2
+        > exec_env->wasm_stack.top_boundary) {
         wasm_set_exception(module_inst, "wasm operand stack overflow");
         return NULL;
     }
 
     /* Allocate the frame */
-    frame = (WASMInterpFrame *)exec_env->wasm_stack.s.top;
-    exec_env->wasm_stack.s.top += size_frame1;
+    frame = (WASMInterpFrame *)exec_env->wasm_stack.top;
+    exec_env->wasm_stack.top += size_frame1;
 
     frame->function = NULL;
     frame->ip = NULL;
@@ -9073,9 +9073,9 @@ jit_codegen_compile_call_to_fast_jit(const WASMModule *module, uint32 func_idx)
     /* rdx = exec_env->cur_frame->prev_frame */
     a.mov(x86::rdx,
           x86::ptr(x86::rsi, (uint32)offsetof(WASMInterpFrame, prev_frame)));
-    /* exec_env->wasm_stack.s.top = cur_frame */
+    /* exec_env->wasm_stack.top = cur_frame */
     {
-        x86::Mem m(x86::rdi, offsetof(WASMExecEnv, wasm_stack.s.top));
+        x86::Mem m(x86::rdi, offsetof(WASMExecEnv, wasm_stack.top));
         a.mov(m, x86::rsi);
     }
     /* exec_env->cur_frame = prev_frame */
@@ -9293,8 +9293,8 @@ jit_codegen_init()
         imm.setValue(INT32_MAX);
         a.jne(imm);
 
-        char *stream = (char *)a.code()->sectionById(0)->buffer().data()
-                       + a.code()->sectionById(0)->buffer().size();
+        char *stream_old = (char *)a.code()->sectionById(0)->buffer().data()
+                           + a.code()->sectionById(0)->buffer().size();
 
         /* If yes, call jit_set_exception_with_id to throw exception,
            and then set eax to JIT_INTERP_ACTION_THROWN, and jump to
@@ -9319,7 +9319,7 @@ jit_codegen_init()
         /* Patch the offset of jne instruction */
         char *stream_new = (char *)a.code()->sectionById(0)->buffer().data()
                            + a.code()->sectionById(0)->buffer().size();
-        *(int32 *)(stream - 4) = (int32)(stream_new - stream);
+        *(int32 *)(stream_old - 4) = (int32)(stream_new - stream_old);
     }
 
     /* Load compiled func ptr and call it */
@@ -9419,7 +9419,7 @@ static uint8 hreg_info_F64[3][16] = {
       1, 1, 1, 1, 1, 1, 1, 0 }, /* caller_saved_jitted */
 };
 
-static const JitHardRegInfo hreg_info = {
+static const JitHardRegInfo g_hreg_info = {
     {
         { 0, NULL, NULL, NULL }, /* VOID */
 
@@ -9459,7 +9459,7 @@ static const JitHardRegInfo hreg_info = {
 const JitHardRegInfo *
 jit_codegen_get_hreg_info()
 {
-    return &hreg_info;
+    return &g_hreg_info;
 }
 
 static const char *reg_names_i32[] = {

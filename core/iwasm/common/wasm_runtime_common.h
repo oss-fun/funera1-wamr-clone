@@ -12,6 +12,9 @@
 #include "wasm_native.h"
 #include "../include/wasm_export.h"
 #include "../interpreter/wasm.h"
+#if WASM_ENABLE_GC != 0
+#include "gc/gc_object.h"
+#endif
 
 #if WASM_ENABLE_LIBC_WASI != 0
 #if WASM_ENABLE_UVWASI == 0
@@ -38,9 +41,14 @@ extern "C" {
     do {                                       \
         *(float64 *)(addr) = (float64)(value); \
     } while (0)
+#define PUT_REF_TO_ADDR(addr, value)        \
+    do {                                    \
+        *(void **)(addr) = (void *)(value); \
+    } while (0)
 
 #define GET_I64_FROM_ADDR(addr) (*(int64 *)(addr))
 #define GET_F64_FROM_ADDR(addr) (*(float64 *)(addr))
+#define GET_REF_FROM_ADDR(addr) (*(void **)(addr))
 
 /* For STORE opcodes */
 #define STORE_I64 PUT_I64_TO_ADDR
@@ -97,6 +105,24 @@ STORE_U8(void *addr, uint8_t value)
         addr_u32[0] = u.parts[0];            \
         addr_u32[1] = u.parts[1];            \
     } while (0)
+#if UINTPTR_MAX == UINT64_MAX
+#define PUT_REF_TO_ADDR(addr, value)         \
+    do {                                     \
+        uint32 *addr_u32 = (uint32 *)(addr); \
+        union {                              \
+            void *val;                       \
+            uint32 parts[2];                 \
+        } u;                                 \
+        u.val = (void *)(value);             \
+        addr_u32[0] = u.parts[0];            \
+        addr_u32[1] = u.parts[1];            \
+    } while (0)
+#else
+#define PUT_REF_TO_ADDR(addr, value)        \
+    do {                                    \
+        *(void **)(addr) = (void *)(value); \
+    } while (0)
+#endif
 
 static inline int64
 GET_I64_FROM_ADDR(uint32 *addr)
@@ -121,6 +147,22 @@ GET_F64_FROM_ADDR(uint32 *addr)
     u.parts[1] = addr[1];
     return u.val;
 }
+
+#if UINTPTR_MAX == UINT64_MAX
+static inline void *
+GET_REF_FROM_ADDR(uint32 *addr)
+{
+    union {
+        void *val;
+        uint32 parts[2];
+    } u;
+    u.parts[0] = addr[0];
+    u.parts[1] = addr[1];
+    return u.val;
+}
+#else
+#define GET_REF_FROM_ADDR(addr) (*(void **)(addr))
+#endif
 
 /* For STORE opcodes */
 #define STORE_I64(addr, value)                      \
@@ -320,6 +362,9 @@ LOAD_I16(void *addr)
 #define SHARED_MEMORY_UNLOCK(memory) (void)0
 #endif
 
+#define CLAMP_U64_TO_U32(value) \
+    ((value) > UINT32_MAX ? UINT32_MAX : (uint32)(value))
+
 typedef struct WASMModuleCommon {
     /* Module type, for module loaded from WASM bytecode binary,
        this field is Wasm_Module_Bytecode, and this structure should
@@ -331,7 +376,7 @@ typedef struct WASMModuleCommon {
 
     /* The following uint8[1] member is a dummy just to indicate
        some module_type dependent members follow.
-       Typically it should be accessed by casting to the corresponding
+       Typically, it should be accessed by casting to the corresponding
        actual module_type dependent structure, not via this member. */
     uint8 module_data[1];
 } WASMModuleCommon;
@@ -347,7 +392,7 @@ typedef struct WASMModuleInstanceCommon {
 
     /* The following uint8[1] member is a dummy just to indicate
        some module_type dependent members follow.
-       Typically it should be accessed by casting to the corresponding
+       Typically, it should be accessed by casting to the corresponding
        actual module_type dependent structure, not via this member. */
     uint8 module_inst_data[1];
 } WASMModuleInstanceCommon;
@@ -371,10 +416,10 @@ typedef struct WASMModuleMemConsumption {
 } WASMModuleMemConsumption;
 
 typedef struct WASMModuleInstMemConsumption {
-    uint32 total_size;
+    uint64 total_size;
     uint32 module_inst_struct_size;
-    uint32 memories_size;
     uint32 app_heap_size;
+    uint64 memories_size;
     uint32 tables_size;
     uint32 globals_size;
     uint32 functions_size;
@@ -416,16 +461,6 @@ typedef struct WASMRegisteredModule {
 } WASMRegisteredModule;
 #endif
 
-typedef struct WASMMemoryInstanceCommon {
-    uint32 module_type;
-
-    /* The following uint8[1] member is a dummy just to indicate
-       some module_type dependent members follow.
-       Typically it should be accessed by casting to the corresponding
-       actual module_type dependent structure, not via this member. */
-    uint8 memory_inst_data[1];
-} WASMMemoryInstanceCommon;
-
 typedef package_type_t PackageType;
 typedef wasm_section_t WASMSection, AOTSection;
 
@@ -436,6 +471,10 @@ typedef struct wasm_frame_t {
     uint32 func_index;
     uint32 func_offset;
     const char *func_name_wp;
+
+    uint32 *sp;
+    uint8 *frame_ref;
+    uint32 *lp;
 } WASMCApiFrame;
 
 #if WASM_ENABLE_JIT != 0
@@ -481,6 +520,12 @@ LLVMJITOptions *
 wasm_runtime_get_llvm_jit_options(void);
 #endif
 
+#if WASM_ENABLE_GC != 0
+/* Internal API */
+uint32
+wasm_runtime_get_gc_heap_size_default(void);
+#endif
+
 /* See wasm_export.h for description */
 WASM_RUNTIME_API_EXTERN bool
 wasm_runtime_full_init(RuntimeInitArgs *init_args);
@@ -520,12 +565,17 @@ WASM_RUNTIME_API_EXTERN void
 wasm_runtime_unload(WASMModuleCommon *module);
 
 /* Internal API */
+uint32
+wasm_runtime_get_max_mem(uint32 max_memory_pages, uint32 module_init_page_count,
+                         uint32 module_max_page_count);
+
+/* Internal API */
 WASMModuleInstanceCommon *
 wasm_runtime_instantiate_internal(WASMModuleCommon *module,
                                   WASMModuleInstanceCommon *parent,
                                   WASMExecEnv *exec_env_main, uint32 stack_size,
-                                  uint32 heap_size, char *error_buf,
-                                  uint32 error_buf_size);
+                                  uint32 heap_size, uint32 max_memory_pages,
+                                  char *error_buf, uint32 error_buf_size);
 
 /* Internal API */
 void
@@ -537,6 +587,12 @@ WASM_RUNTIME_API_EXTERN WASMModuleInstanceCommon *
 wasm_runtime_instantiate(WASMModuleCommon *module, uint32 default_stack_size,
                          uint32 host_managed_heap_size, char *error_buf,
                          uint32 error_buf_size);
+
+/* See wasm_export.h for description */
+WASM_RUNTIME_API_EXTERN WASMModuleInstanceCommon *
+wasm_runtime_instantiate_ex(WASMModuleCommon *module,
+                            const InstantiationArgs *args, char *error_buf,
+                            uint32 error_buf_size);
 
 /* See wasm_export.h for description */
 WASM_RUNTIME_API_EXTERN bool
@@ -558,10 +614,10 @@ wasm_runtime_get_module(WASMModuleInstanceCommon *module_inst);
 /* See wasm_export.h for description */
 WASM_RUNTIME_API_EXTERN WASMFunctionInstanceCommon *
 wasm_runtime_lookup_function(WASMModuleInstanceCommon *const module_inst,
-                             const char *name, const char *signature);
+                             const char *name);
 
 /* Internal API */
-WASMType *
+WASMFuncType *
 wasm_runtime_get_function_type(const WASMFunctionInstanceCommon *function,
                                uint32 module_type);
 
@@ -717,66 +773,66 @@ WASM_RUNTIME_API_EXTERN void *
 wasm_runtime_get_custom_data(WASMModuleInstanceCommon *module_inst);
 
 /* Internal API */
-uint32
+uint64
 wasm_runtime_module_malloc_internal(WASMModuleInstanceCommon *module_inst,
-                                    WASMExecEnv *exec_env, uint32 size,
+                                    WASMExecEnv *exec_env, uint64 size,
                                     void **p_native_addr);
 
 /* Internal API */
-uint32
+uint64
 wasm_runtime_module_realloc_internal(WASMModuleInstanceCommon *module_inst,
-                                     WASMExecEnv *exec_env, uint32 ptr,
-                                     uint32 size, void **p_native_addr);
+                                     WASMExecEnv *exec_env, uint64 ptr,
+                                     uint64 size, void **p_native_addr);
 
 /* Internal API */
 void
 wasm_runtime_module_free_internal(WASMModuleInstanceCommon *module_inst,
-                                  WASMExecEnv *exec_env, uint32 ptr);
+                                  WASMExecEnv *exec_env, uint64 ptr);
 
 /* See wasm_export.h for description */
-WASM_RUNTIME_API_EXTERN uint32
-wasm_runtime_module_malloc(WASMModuleInstanceCommon *module_inst, uint32 size,
+WASM_RUNTIME_API_EXTERN uint64
+wasm_runtime_module_malloc(WASMModuleInstanceCommon *module_inst, uint64 size,
                            void **p_native_addr);
 
 /* See wasm_export.h for description */
 WASM_RUNTIME_API_EXTERN void
-wasm_runtime_module_free(WASMModuleInstanceCommon *module_inst, uint32 ptr);
+wasm_runtime_module_free(WASMModuleInstanceCommon *module_inst, uint64 ptr);
 
 /* See wasm_export.h for description */
-WASM_RUNTIME_API_EXTERN uint32
+WASM_RUNTIME_API_EXTERN uint64
 wasm_runtime_module_dup_data(WASMModuleInstanceCommon *module_inst,
-                             const char *src, uint32 size);
+                             const char *src, uint64 size);
 
 /* See wasm_export.h for description */
 WASM_RUNTIME_API_EXTERN bool
 wasm_runtime_validate_app_addr(WASMModuleInstanceCommon *module_inst,
-                               uint32 app_offset, uint32 size);
+                               uint64 app_offset, uint64 size);
 
 /* See wasm_export.h for description */
 WASM_RUNTIME_API_EXTERN bool
 wasm_runtime_validate_app_str_addr(WASMModuleInstanceCommon *module_inst,
-                                   uint32 app_str_offset);
+                                   uint64 app_str_offset);
 
 /* See wasm_export.h for description */
 WASM_RUNTIME_API_EXTERN bool
 wasm_runtime_validate_native_addr(WASMModuleInstanceCommon *module_inst,
-                                  void *native_ptr, uint32 size);
+                                  void *native_ptr, uint64 size);
 
 /* See wasm_export.h for description */
 WASM_RUNTIME_API_EXTERN void *
 wasm_runtime_addr_app_to_native(WASMModuleInstanceCommon *module_inst,
-                                uint32 app_offset);
+                                uint64 app_offset);
 
 /* See wasm_export.h for description */
-WASM_RUNTIME_API_EXTERN uint32
+WASM_RUNTIME_API_EXTERN uint64
 wasm_runtime_addr_native_to_app(WASMModuleInstanceCommon *module_inst,
                                 void *native_ptr);
 
 /* See wasm_export.h for description */
 WASM_RUNTIME_API_EXTERN bool
 wasm_runtime_get_app_addr_range(WASMModuleInstanceCommon *module_inst,
-                                uint32 app_offset, uint32 *p_app_start_offset,
-                                uint32 *p_app_end_offset);
+                                uint64 app_offset, uint64 *p_app_start_offset,
+                                uint64 *p_app_end_offset);
 
 /* See wasm_export.h for description */
 WASM_RUNTIME_API_EXTERN bool
@@ -845,7 +901,8 @@ bool
 wasm_runtime_sub_module_instantiate(WASMModuleCommon *module,
                                     WASMModuleInstanceCommon *module_inst,
                                     uint32 stack_size, uint32 heap_size,
-                                    char *error_buf, uint32 error_buf_size);
+                                    uint32 max_memory_pages, char *error_buf,
+                                    uint32 error_buf_size);
 void
 wasm_runtime_sub_module_deinstantiate(WASMModuleInstanceCommon *module_inst);
 #endif
@@ -855,18 +912,18 @@ WASMExport *
 loader_find_export(const WASMModuleCommon *module, const char *module_name,
                    const char *field_name, uint8 export_kind, char *error_buf,
                    uint32 error_buf_size);
-#endif /* WASM_ENALBE_MULTI_MODULE */
+#endif /* WASM_ENABLE_MULTI_MODULE */
 
 bool
 wasm_runtime_is_built_in_module(const char *module_name);
 
 #if WASM_ENABLE_THREAD_MGR != 0
 bool
-wasm_exec_env_get_aux_stack(WASMExecEnv *exec_env, uint32 *start_offset,
+wasm_exec_env_get_aux_stack(WASMExecEnv *exec_env, uint64 *start_offset,
                             uint32 *size);
 
 bool
-wasm_exec_env_set_aux_stack(WASMExecEnv *exec_env, uint32 start_offset,
+wasm_exec_env_set_aux_stack(WASMExecEnv *exec_env, uint64 start_offset,
                             uint32 size);
 #endif
 
@@ -927,6 +984,15 @@ wasm_runtime_set_wasi_ns_lookup_pool(wasm_module_t module,
                                      const char *ns_lookup_pool[],
                                      uint32 ns_lookup_pool_size);
 #endif /* end of WASM_ENABLE_LIBC_WASI */
+
+#if WASM_ENABLE_GC != 0
+void
+wasm_runtime_set_gc_heap_handle(WASMModuleInstanceCommon *module_inst,
+                                void *gc_heap_handle);
+
+void *
+wasm_runtime_get_gc_heap_handle(WASMModuleInstanceCommon *module_inst);
+#endif
 
 #if WASM_ENABLE_REF_TYPES != 0
 /* See wasm_export.h for description */
@@ -1021,15 +1087,15 @@ wasm_runtime_get_context(WASMModuleInstanceCommon *inst, void *key);
 
 bool
 wasm_runtime_invoke_native(WASMExecEnv *exec_env, void *func_ptr,
-                           const WASMType *func_type, const char *signature,
+                           const WASMFuncType *func_type, const char *signature,
                            void *attachment, uint32 *argv, uint32 argc,
                            uint32 *ret);
 
 bool
 wasm_runtime_invoke_native_raw(WASMExecEnv *exec_env, void *func_ptr,
-                               const WASMType *func_type, const char *signature,
-                               void *attachment, uint32 *argv, uint32 argc,
-                               uint32 *ret);
+                               const WASMFuncType *func_type,
+                               const char *signature, void *attachment,
+                               uint32 *argv, uint32 argc, uint32 *ret);
 
 void
 wasm_runtime_read_v128(const uint8 *bytes, uint64 *ret1, uint64 *ret2);
@@ -1047,16 +1113,24 @@ wasm_runtime_dump_exec_env_mem_consumption(const WASMExecEnv *exec_env);
 bool
 wasm_runtime_get_table_elem_type(const WASMModuleCommon *module_comm,
                                  uint32 table_idx, uint8 *out_elem_type,
+#if WASM_ENABLE_GC != 0
+                                 WASMRefType **out_ref_type,
+#endif
                                  uint32 *out_min_size, uint32 *out_max_size);
 
 bool
 wasm_runtime_get_table_inst_elem_type(
     const WASMModuleInstanceCommon *module_inst_comm, uint32 table_idx,
-    uint8 *out_elem_type, uint32 *out_min_size, uint32 *out_max_size);
+    uint8 *out_elem_type,
+#if WASM_ENABLE_GC != 0
+    WASMRefType **out_ref_type,
+#endif
+    uint32 *out_min_size, uint32 *out_max_size);
 
 bool
 wasm_runtime_get_export_func_type(const WASMModuleCommon *module_comm,
-                                  const WASMExport *export_, WASMType **out);
+                                  const WASMExport *export_,
+                                  WASMFuncType **out);
 
 bool
 wasm_runtime_get_export_global_type(const WASMModuleCommon *module_comm,
@@ -1071,12 +1145,15 @@ wasm_runtime_get_export_memory_type(const WASMModuleCommon *module_comm,
 bool
 wasm_runtime_get_export_table_type(const WASMModuleCommon *module_comm,
                                    const WASMExport *export_,
-                                   uint8 *out_elem_type, uint32 *out_min_size,
-                                   uint32 *out_max_size);
+                                   uint8 *out_elem_type,
+#if WASM_ENABLE_GC != 0
+                                   WASMRefType **out_ref_type,
+#endif
+                                   uint32 *out_min_size, uint32 *out_max_size);
 
 bool
 wasm_runtime_invoke_c_api_native(WASMModuleInstanceCommon *module_inst,
-                                 void *func_ptr, WASMType *func_type,
+                                 void *func_ptr, WASMFuncType *func_type,
                                  uint32 argc, uint32 *argv, bool with_env,
                                  void *wasm_c_api_env);
 
@@ -1114,6 +1191,16 @@ wasm_runtime_end_blocking_op(WASMExecEnv *exec_env);
 
 void
 wasm_runtime_interrupt_blocking_op(WASMExecEnv *exec_env);
+
+WASM_RUNTIME_API_EXTERN bool
+wasm_runtime_detect_native_stack_overflow(WASMExecEnv *exec_env);
+
+WASM_RUNTIME_API_EXTERN bool
+wasm_runtime_detect_native_stack_overflow_size(WASMExecEnv *exec_env,
+                                               uint32 requested_size);
+
+WASM_RUNTIME_API_EXTERN bool
+wasm_runtime_is_underlying_binary_freeable(WASMModuleCommon *const module);
 
 #if WASM_ENABLE_LINUX_PERF != 0
 bool
