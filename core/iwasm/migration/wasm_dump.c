@@ -512,9 +512,9 @@ int wasm_dump(WASMExecEnv *exec_env,
 
 static bool sig_flag = false;
 
-void wasm_runtime_checkpoint() {
-    wasm_set_checkpoint(true);
-}
+// void wasm_runtime_checkpoint() {
+//     wasm_set_checkpoint(true);
+// }
 
 inline 
 void wasm_set_checkpoint(bool f) {
